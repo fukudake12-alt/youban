@@ -1,0 +1,2219 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>溶接番号付番ソフト（Web版）</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
+<script src="https://unpkg.com/@pdf-lib/fontkit@1.1.1/dist/fontkit.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/wawoff2@2.0.1/build/decompress_binding.js"></script>
+<style>
+  * { box-sizing: border-box; }
+  html, body {
+    margin:0; padding:0; height:100%;
+    background:#2b2b2b; color:#ddd;
+    font-family:"Meiryo","Hiragino Sans",sans-serif;
+    overflow:hidden;
+  }
+  #app { display:flex; flex-direction:column; height:100vh; }
+
+  .toolbar {
+    background:#3c3c3c; padding:6px 8px; display:flex; align-items:center;
+    flex-wrap:wrap; gap:4px; border-bottom:1px solid #222;
+  }
+  /* 関連するボタン類を1つの箱にまとめて視認性を上げるためのグループ枠 */
+  .tgroup {
+    display:flex; align-items:center; gap:4px;
+    background:#474747; padding:4px 6px; border-radius:6px;
+  }
+  .stylebar {
+    background:#333; padding:5px 10px; display:flex; align-items:center;
+    gap:10px; border-bottom:1px solid #222; font-size:12px; color:#ccc;
+    flex-wrap:wrap;
+  }
+  .sep { width:1px; height:24px; background:#666; margin:0 6px; }
+
+  button.tool {
+    background:#555; color:#fff; border:none; border-radius:4px;
+    padding:6px 10px; font-size:12px; cursor:pointer; white-space:nowrap;
+  }
+  button.tool:hover { background:#686868; }
+  button.tool:disabled { opacity:.4; cursor:default; }
+  button.tool.danger:hover { background:#8a3d3d; }
+
+  label.radio {
+    display:flex; align-items:center; gap:3px; background:#444;
+    padding:5px 9px; border-radius:4px; cursor:pointer; font-size:12px;
+  }
+  label.radio.active { background:#2f6f4f; }
+  label.radio input { display:none; }
+
+  input[type=number] { width:52px; background:#222; color:#fff; border:1px solid #555; border-radius:3px; padding:3px; }
+  input[type=color]  { width:32px; height:24px; border:none; background:none; padding:0; cursor:pointer; }
+  select { background:#222; color:#fff; border:1px solid #555; border-radius:3px; padding:3px; font-size:12px; }
+  input[type=range] { vertical-align:middle; }
+
+  #pageLabel { font-size:12px; min-width:70px; text-align:center; }
+
+  #canvasWrap {
+    flex:1; overflow:auto; background:#1a1a1a; position:relative;
+    display:flex; align-items:flex-start; justify-content:center;
+  }
+  #stage { position:relative; margin:20px; box-shadow:0 0 18px rgba(0,0,0,.6); }
+  #pdfCanvas, #annoCanvas { position:absolute; top:0; left:0; }
+  #annoCanvas { cursor:crosshair; }
+
+  #dropHint {
+    position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+    color:#777; font-size:15px; text-align:center; pointer-events:none;
+  }
+  #statusBar {
+    background:#242424; color:#999; font-size:11px; padding:3px 10px; border-top:1px solid #222;
+  }
+  #fileInput { display:none; }
+  .fileChip {
+    background:#444; padding:4px 8px; border-radius:4px; font-size:11px; cursor:pointer; color:#ddd;
+    border:1px solid #555; display:flex; align-items:center; gap:5px;
+  }
+  .fileChip.active { background:#2f6f4f; border-color:#3fae7a; }
+  .fileChip .rm { color:#e88; font-weight:bold; padding:0 2px; }
+  .fileChip .rm:hover { color:#f55; }
+
+  /* ライセンスキー入力ゲート */
+  .license-overlay{
+    position:fixed;inset:0;background:#2b2b2b;
+    z-index:9999;display:none;align-items:center;justify-content:center;
+  }
+  .license-overlay.vis{display:flex;}
+  .license-box{
+    background:#3c3c3c;border:1px solid #555;border-radius:14px;
+    padding:24px;width:min(300px,88vw);box-shadow:0 8px 28px rgba(0,0,0,0.5);
+    text-align:center;
+  }
+  .license-title{font-size:15px;font-weight:700;color:#3fae7a;margin-bottom:6px;}
+  .license-sub{font-size:11px;color:#aaa;margin-bottom:16px;line-height:1.5;}
+  .license-box input{
+    width:100%;padding:10px;border:1.5px solid #555;border-radius:8px;
+    background:#222;color:#fff;font-size:15px;margin-bottom:10px;text-align:center;
+    letter-spacing:1px;
+  }
+  .license-err{color:#f55;font-size:11px;margin-bottom:10px;display:none;}
+  .license-btn{
+    width:100%;padding:10px;border-radius:8px;border:none;background:#2f6f4f;color:#fff;
+    font-weight:700;font-size:14px;cursor:pointer;
+  }
+  .license-btn:hover{background:#3fae7a;}
+</style>
+</head>
+<body>
+<div class="license-overlay" id="licenseOverlay">
+  <div class="license-box">
+    <div class="license-title">🔒 ライセンスキーを入力</div>
+    <div class="license-sub">このアプリを継続してご利用いただくには、配布されたライセンスキーの入力が必要です（約6か月ごとに再確認されます）</div>
+    <input id="licenseKeyField" type="text" inputmode="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="ライセンスキー">
+    <div class="license-err" id="licenseError">キーが正しくありません。管理者にご確認ください。</div>
+    <button class="license-btn" id="licenseConfirmBtn">確認</button>
+  </div>
+</div>
+<div id="app">
+
+  <div class="toolbar">
+    <div class="tgroup">
+      <button class="tool" id="btnOpen">📂 開く</button>
+      <button class="tool" id="btnAdd">➕ PDF追加</button>
+      <button class="tool" id="btnSave" disabled>💾 保存（ダウンロード）</button>
+    </div>
+    <div class="sep"></div>
+
+    <div class="tgroup">
+      <button class="tool" id="btnPrev">◀ 前ページ</button>
+      <span id="pageLabel">- / -</span>
+      <button class="tool" id="btnNext">次ページ ▶</button>
+    </div>
+    <div class="sep"></div>
+
+    <div class="tgroup">
+      <button class="tool" id="zoom50">50%</button>
+      <button class="tool" id="zoom75">75%</button>
+      <button class="tool" id="zoom100">100%</button>
+      <button class="tool" id="zoom150">150%</button>
+      <button class="tool" id="zoom200">200%</button>
+    </div>
+    <div class="sep"></div>
+    <button class="tool" id="btnToggleList">📋 一覧</button>
+  </div>
+
+  <div class="toolbar">
+    <div class="tgroup">
+      <label class="radio active" data-mode="add_weld"><input type="radio" name="mode" value="add_weld" checked>🔢 番号追加</label>
+      <label class="radio" data-mode="add_text"><input type="radio" name="mode" value="add_text">✏ テキスト追加</label>
+      <label class="radio" data-mode="add_line"><input type="radio" name="mode" value="add_line">📐 引き出し線</label>
+      <label class="radio" data-mode="range_select"><input type="radio" name="mode" value="range_select">⬜ 範囲選択</label>
+      <label class="radio" data-mode="select"><input type="radio" name="mode" value="select">☑ 選択/欠番</label>
+      <label class="radio" data-mode="delete"><input type="radio" name="mode" value="delete">🗑 削除</label>
+    </div>
+    <div class="sep"></div>
+
+    <div class="tgroup">
+      <button class="tool" id="btnUndo" disabled>◀ 戻る</button>
+      <button class="tool" id="btnRedo" disabled>進む ▶</button>
+      <button class="tool" id="btnResetPage">このページを1から振直し</button>
+    </div>
+    <div class="sep"></div>
+
+    <div class="tgroup">
+      <span style="font-size:12px;">開始番号:</span>
+      <input type="number" id="startNum" value="1" min="1">
+      <button class="tool" id="btnApplyStart">この番号から採番</button>
+    </div>
+  </div>
+
+  <div id="annotListPanel" style="display:none;position:fixed;top:0;right:0;bottom:0;width:260px;
+      background:#2f2f2f;border-left:1px solid #555;z-index:500;overflow-y:auto;font-size:12px;color:#ddd;">
+    <div style="padding:8px 10px;background:#3c3c3c;border-bottom:1px solid #222;display:flex;justify-content:space-between;align-items:center;">
+      <span>アノテーション一覧</span>
+      <button class="tool" id="btnCloseList" style="padding:2px 8px;">✕</button>
+    </div>
+    <div id="annotListBody" style="padding:6px 8px;"></div>
+  </div>
+
+  <div class="stylebar" id="fileChipsBar" style="display:none;">
+    <span style="color:#aaa;">読込中のPDF:</span>
+    <div id="fileChips" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
+    <div class="sep"></div>
+    <button class="tool" id="btnDeleteSelectedFiles">選択削除</button>
+    <button class="tool" id="btnSaveSelectedFiles">選択保存</button>
+    <button class="tool" id="btnClearAllFiles">全解除</button>
+  </div>
+
+  <div class="stylebar">
+    <div class="tgroup">
+      <span>線の太さ:</span><input type="range" id="lw" min="0.5" max="5" step="0.5" value="1.2">
+      <span>丸の大きさ:</span><input type="range" id="cr" min="5" max="25" step="1" value="9">
+      <span>文字サイズ:</span><input type="range" id="fs" min="5" max="30" step="1" value="10">
+    </div>
+    <div class="sep"></div>
+
+    <div class="tgroup">
+      <span>色:</span><input type="color" id="colorPick" value="#ff0000">
+      <span id="colorPresets" style="display:flex;gap:3px;">
+        <button type="button" class="colorPresetBtn" data-color="#ff0000" style="width:20px;height:20px;border-radius:3px;border:1px solid #666;background:#ff0000;cursor:pointer;padding:0;" title="赤"></button>
+        <button type="button" class="colorPresetBtn" data-color="#0000ff" style="width:20px;height:20px;border-radius:3px;border:1px solid #666;background:#0000ff;cursor:pointer;padding:0;" title="青"></button>
+        <button type="button" class="colorPresetBtn" data-color="#00aa00" style="width:20px;height:20px;border-radius:3px;border:1px solid #666;background:#00aa00;cursor:pointer;padding:0;" title="緑"></button>
+        <button type="button" class="colorPresetBtn" data-color="#000000" style="width:20px;height:20px;border-radius:3px;border:1px solid #666;background:#000000;cursor:pointer;padding:0;" title="黒"></button>
+        <button type="button" class="colorPresetBtn" data-color="#ff8c00" style="width:20px;height:20px;border-radius:3px;border:1px solid #666;background:#ff8c00;cursor:pointer;padding:0;" title="橙"></button>
+      </span>
+    </div>
+    <div class="sep"></div>
+
+    <div class="tgroup">
+      <span>フォント:</span>
+      <select id="fontSelect">
+        <option value="gothic" selected>ゴシック体（日本語可）</option>
+        <option value="mincho">明朝体（日本語可）</option>
+        <option value="helv">Helvetica（英数字専用）</option>
+        <option value="courier">Courier（英数字専用）</option>
+      </select>
+    </div>
+    <div class="sep"></div>
+
+    <button class="tool" id="btnApplyStyle" style="background:#446688;">選択に適用</button>
+    <div class="sep"></div>
+
+    <div class="tgroup">
+      <span>取消時の番号:</span>
+      <label style="display:flex;align-items:center;gap:2px;cursor:pointer;">
+        <input type="radio" name="delMode" value="renumber" checked>詰める
+      </label>
+      <label style="display:flex;align-items:center;gap:2px;cursor:pointer;">
+        <input type="radio" name="delMode" value="keep">欠番のまま
+      </label>
+    </div>
+  </div>
+
+  <div id="canvasWrap">
+    <div id="stage">
+      <canvas id="pdfCanvas"></canvas>
+      <canvas id="annoCanvas"></canvas>
+    </div>
+    <div id="dropHint">PDFファイルをここにドラッグ＆ドロップ、または「📂 開く」から選択してください</div>
+  </div>
+
+  <div id="statusBar" style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+    <span id="statusBarText">準備完了</span>
+    <button id="btnCancelPending" type="button" style="display:none;background:#a33;color:#fff;border:none;border-radius:4px;padding:2px 10px;font-size:11px;cursor:pointer;flex-shrink:0;">✕ 取消</button>
+  </div>
+</div>
+
+<input type="file" id="fileInput" accept="application/pdf" multiple>
+<input type="file" id="fileInputAdd" accept="application/pdf" multiple style="display:none;">
+
+<script>
+pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+const { PDFDocument, rgb, StandardFonts, degrees, PDFName, PDFHexString } = PDFLib;
+
+/* ===================== 状態 ===================== */
+let pdfFiles = [];          // [{name, bytes(ArrayBuffer), pdfjsDoc, pageCount, offset}]
+let totalPages = 0;
+let curPage = 0;            // 0-indexed（複数PDFをまたぐグローバルページ番号）
+let zoom = 1.0;
+const ZOOM_LEVELS = [0.1,0.12,0.15,0.18,0.2,0.23,0.25,0.28,0.33,0.38,0.4,0.45,0.5,0.55,0.6,0.67,
+  0.75,0.82,0.85,0.9,1.0,1.05,1.1,1.15,1.2,1.25,1.3,1.4,1.5,1.6,1.65,1.75,1.8,1.9,2.0,2.1,2.25,2.4,2.5,2.65,2.75,3.0,3.25,3.5,4.0];
+let curViewport = null;     // 現在ページ用（座標変換用）
+let dpr = window.devicePixelRatio || 1;
+let canvasScale = dpr;   // 実際にcanvas解像度へ掛ける倍率（低ズーム時の粗さ対策込み）
+const RENDER_MIN_ZOOM = 1.5; // これより低いズームでも、この倍率相当の解像度で描画してぼやけを防ぐ
+
+function recomputeOffsets(){
+  let off = 0;
+  for (const pf of pdfFiles){ pf.offset = off; off += pf.pageCount; }
+  totalPages = off;
+}
+function locatePage(g){
+  for (const pf of pdfFiles){ if (g>=pf.offset && g<pf.offset+pf.pageCount) return {pf, local: g-pf.offset}; }
+  return null;
+}
+
+let annots = [];            // {page, kind, x, y, number, text, color, lw, r, fs, voided}
+let nextNumByPage = {};     // page -> 次の番号
+
+let undoStack = [];
+let redoStack = [];
+let isDirty = false;   // 保存後に変更があるかどうか（離脱確認・上書き確認に使用）
+let deleteRenumberMode = "renumber"; // "renumber"=詰める / "keep"=欠番のまま
+
+let mode = "add_weld";
+let selectedItems = [];     // 選択中のannotation配列（複数選択対応）
+let clipboard = [];         // コピー＆ペースト用クリップボード
+let dragging = false;
+let dragStartPdf = null;         // ドラッグ開始時のPDF座標
+let dragOrigPositions = null;    // ドラッグ開始時点の各選択アイテムの元座標
+let dragHitTypes = null;         // 各選択アイテムが "end"(番号のみ) か "all"(全体) か
+
+/* 引き出し線（ポリライン）描画中の状態（独立した「引き出し線」モード用） */
+let drawingLine = null;     // {pts:[[x,y],...]}
+let lineMouseCur = null;    // ラバーバンド用の現在マウス位置(PDF座標)
+
+/* 番号追加/テキスト追加モード：始点→終点＋Shift折れ点の採番用状態 */
+let waitingStart   = false;   // 始点は打った、終点待ち
+let startPdf       = null;    // 始点のPDF座標
+let startClient    = null;    // 始点のクライアント座標（長押し距離判定用）
+let numPolyMode    = false;   // 折れ点モード中（Shiftで複数頂点）
+let numPolyPts     = [];      // 折れ点モード中の頂点(PDF座標)配列
+let numLineMouseCur = null;   // 採番モードのラバーバンド用マウス位置(PDF座標)
+
+/* 採番モード中の長押し判定（長押しドラッグで範囲選択に切替） */
+const LONG_PRESS_MS = 180;
+const DRAG_THRESHOLD_PX = 6;
+let pressInfo = null;         // {time, clientX, clientY}
+let numDragRect = false;      // 長押しドラッグで範囲選択プレビュー中か
+let numRangeStartPdf = null;
+let numRangeCurPdf = null;
+
+/* 右クリック：基点を指定してコピー／移動 */
+let basePickMode = null;      // "copy" | "move" | null
+let baseClipboard = [];       // 基点オフセット付きのコピー元データ
+let pasteMode = false;        // 基点確定後、貼り付け位置クリック待ち
+let pasteWasMove = false;     // 今回の貼り付けが「移動」由来か
+let moveUndoIndex = null;     // 移動の元データが入ったundoStackのインデックス（Escキャンセル復元用）
+let paletteMenuEl = null;     // 右クリックメニューのDOM要素
+
+/* 範囲選択の矩形ドラッグ状態 */
+let rangeSelecting = false;
+let rangeStartPdf = null;
+let rangeCurPdf = null;
+
+/* 中クリックドラッグでのパン操作 */
+let panning = false;
+let panStart = null;
+let panAccumX = 0, panAccumY = 0; // Python版と同じく、15px溜まるごとに1目盛スクロールする
+
+/* ===================== DOM ===================== */
+const pdfCanvas  = document.getElementById("pdfCanvas");
+const annoCanvas = document.getElementById("annoCanvas");
+const pdfCtx  = pdfCanvas.getContext("2d");
+const annoCtx = annoCanvas.getContext("2d");
+const stage = document.getElementById("stage");
+const canvasWrap = document.getElementById("canvasWrap");
+const dropHint = document.getElementById("dropHint");
+const pageLabel = document.getElementById("pageLabel");
+const statusBar = document.getElementById("statusBarText");
+const btnCancelPending = document.getElementById("btnCancelPending");
+const fileInput = document.getElementById("fileInput");
+
+const lwInput = document.getElementById("lw");
+const crInput = document.getElementById("cr");
+const fsInput = document.getElementById("fs");
+const colorInput = document.getElementById("colorPick");
+const fontSelect = document.getElementById("fontSelect");
+const startNumInput = document.getElementById("startNum");
+
+function setStatus(t){ statusBar.textContent = t; updatePendingUI(); }
+
+// コピー／移動の基点待ち・貼り付け待ちなど「操作の途中でキャンセル可能な状態」の間だけ
+// ステータスバーに✕ボタンを出す。スマホにはEscキーが無く、それまでキャンセル手段が
+// 無かったため追加した。
+function updatePendingUI(){
+  const pending = !!(basePickMode || pasteMode || numPolyMode || waitingStart || drawingLine || rangeSelecting);
+  btnCancelPending.style.display = pending ? "" : "none";
+}
+
+// Escapeキーと✕ボタンの両方から呼ばれる、進行中の操作を取り消す共通処理
+function cancelCurrentAction(){
+  if (basePickMode){ basePickMode=null; setStatus("キャンセルしました"); }
+  else if (pasteMode){
+    clearPastePreview();
+    if (pasteWasMove && moveUndoIndex!==null){
+      // 移動中のキャンセル：削除前の状態へ直接戻す（redoスタックには積まない）
+      const snap = undoStack[moveUndoIndex];
+      if (snap){ annots = snap.annots; nextNumByPage = snap.nextNumByPage; undoStack.splice(moveUndoIndex,1); updateUndoRedoButtons(); }
+    }
+    pasteMode=false; baseClipboard=[]; pasteWasMove=false; moveUndoIndex=null;
+    selectedItems=[];
+    setStatus("貼り付けをキャンセルしました");
+  }
+  else if (numPolyMode || waitingStart){
+    numPolyMode=false; numPolyPts=[]; numLineMouseCur=null;
+    waitingStart=false; startPdf=null; startClient=null;
+    pressInfo=null; numDragRect=false; numRangeStartPdf=null; numRangeCurPdf=null;
+    setStatus("採番を取消しました");
+  }
+  else if (drawingLine){ drawingLine=null; lineMouseCur=null; setStatus("引き出し線の作成を取消しました"); }
+  else if (rangeSelecting){ rangeSelecting=false; rangeStartPdf=null; rangeCurPdf=null; }
+  else if (selectedItems.length){ selectedItems=[]; }
+  redrawAnnotations();
+}
+btnCancelPending.onclick = cancelCurrentAction;
+
+
+/* ===================== ファイル読み込み ===================== */
+const fileInputAdd = document.getElementById("fileInputAdd");
+
+document.getElementById("btnOpen").onclick = () => {
+  if (isDirty && !window.confirm("保存されていない変更があります。破棄して新しく開きますか？")) return;
+  fileInput.click();
+};
+document.getElementById("btnAdd").onclick = () => fileInputAdd.click();
+
+fileInput.onchange = e => { if (e.target.files.length) loadFiles(e.target.files, false); fileInput.value=""; };
+fileInputAdd.onchange = e => { if (e.target.files.length) loadFiles(e.target.files, true); fileInputAdd.value=""; };
+
+["dragover","dragenter"].forEach(ev=>{
+  document.body.addEventListener(ev, e=>{ e.preventDefault(); });
+});
+document.body.addEventListener("drop", e=>{
+  e.preventDefault();
+  const files = [...e.dataTransfer.files].filter(f=>f.type==="application/pdf" || f.name.toLowerCase().endsWith(".pdf"));
+  if (!files.length) return;
+  // 既に読み込み済みのPDFがあれば追加読込になるため、破棄確認は不要
+  loadFiles(files, pdfFiles.length>0);
+});
+
+async function loadFiles(fileList, append){
+  const files = Array.from(fileList).filter(f=>f.type==="application/pdf" || f.name.toLowerCase().endsWith(".pdf"));
+  if (!files.length) return;
+  setStatus("読み込み中...");
+
+  if (!append){
+    pdfFiles = [];
+    annots = [];
+    nextNumByPage = {};
+    undoStack = []; redoStack = [];
+    selectedItems = [];
+    curPage = 0;
+    isDirty = false;
+    waitingStart=false; startPdf=null; startClient=null;
+    numPolyMode=false; numPolyPts=[]; numLineMouseCur=null;
+    pressInfo=null; numDragRect=false; numRangeStartPdf=null; numRangeCurPdf=null;
+    basePickMode=null; baseClipboard=[]; pasteMode=false; pasteWasMove=false; moveUndoIndex=null;
+  }
+
+  const startIdx = pdfFiles.length;
+  const pendingRestores = [];
+  for (const file of files){
+    const buf = await file.arrayBuffer();
+    const bytes = buf.slice(0);
+
+    // このツールで保存したPDFであれば、前回配置した番号/テキストの情報が
+    // 埋め込まれているので、それを取り出しておく（オフセット確定後に反映する）。
+    // ついでに、画面表示専用のコピー（本ツール由来のアノテーションを除いたもの）も
+    // ここで作っておく。他社アプリ/他者が付けた注釈（スタンプ等）はそのまま残し、
+    // pdf.js標準の描画で表示させるためのもの（本ツール自身の円・線・番号は
+    // annoCanvas側で自前描画するので、pdf.js側では表示させない＝二重表示防止）。
+    let displayBytes = bytes;
+    let restoredAnnots = null;
+    try{
+      const plDoc = await PDFDocument.load(bytes);
+      const val = plDoc.catalog.lookup(PDFName.of("WeldToolData"));
+      if (val){
+        const payload = JSON.parse(val.decodeText());
+        if (payload && Array.isArray(payload.annots)) restoredAnnots = payload.annots;
+      }
+      let hasOwnAnnots = false;
+      plDoc.getPages().forEach(page=>{
+        const kept = keepNonToolAnnotRefs(plDoc.context, page);
+        const existingRef = page.node.get(PDFName.of("Annots"));
+        if (existingRef){
+          const existingArr = plDoc.context.lookup(existingRef);
+          const beforeCount = (existingArr && typeof existingArr.size === "function") ? existingArr.size() : 0;
+          if (beforeCount !== kept.length) hasOwnAnnots = true;
+        }
+        page.node.set(PDFName.of("Annots"), plDoc.context.obj(kept));
+      });
+      if (hasOwnAnnots){
+        displayBytes = await plDoc.save();
+      }
+    }catch(e){
+      console.warn("前回のアノテーションデータの読み込み、または表示用コピーの作成に失敗しました", e);
+    }
+
+    // 一部のPDF（特定の日本語フォントを使ったもの）では、pdf.js側に文字コード
+    // 変換用の補助データ(CMap)の場所を教えないと、該当フォントの読み込みに失敗し
+    // その文字だけが表示されなくなることが確認されたため、明示的に指定している。
+    const doc = await pdfjsLib.getDocument({
+      data: displayBytes,
+      cMapUrl: "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/cmaps/",
+      cMapPacked: true,
+    }).promise;
+    const pf = {name:file.name, bytes, pdfjsDoc:doc, pageCount:doc.numPages, offset:0};
+    pdfFiles.push(pf);
+    if (restoredAnnots) pendingRestores.push({pf, restored: restoredAnnots});
+  }
+  recomputeOffsets();
+
+  if (pendingRestores.length){
+    pendingRestores.forEach(({pf, restored})=>{
+      restored.forEach(a=>{
+        annots.push({...a, page: a.page + pf.offset});
+      });
+    });
+    const touchedPages = new Set(annots.filter(a=>a.kind==="weld").map(a=>a.page));
+    touchedPages.forEach(recalcNextNumForPage);
+    setStatus(`前回配置した ${pendingRestores.reduce((s,r)=>s+r.restored.length,0)} 個の項目を復元しました`);
+  }
+
+  if (append){
+    curPage = pdfFiles[startIdx].offset;   // 追加したファイルの先頭ページへ移動
+  }
+
+  dropHint.style.display = "none";
+  document.getElementById("btnSave").disabled = false;
+  updateUndoRedoButtons();
+  renderFileChips();
+  await renderPage();
+  setStatus(`${files.length} 個のPDFを読み込みました（全 ${totalPages} ページ / ${pdfFiles.length} ファイル）`);
+}
+
+async function removeFiles(filesToRemove){
+  if (!filesToRemove.length) return;
+  const removedSet = new Set(filesToRemove);
+  const oldOrder = pdfFiles.slice();
+  function oldPfOf(page){
+    for (const pf of oldOrder){ if (page>=pf.offset && page<pf.offset+pf.pageCount) return pf; }
+    return null;
+  }
+  oldOrder.forEach(pf=>{ pf._oldOffset = pf.offset; });
+
+  const kept = [];
+  for (const a of annots){
+    const pf = oldPfOf(a.page);
+    if (!pf || removedSet.has(pf)) continue;
+    kept.push({a, pf});
+  }
+
+  pdfFiles = oldOrder.filter(pf=>!removedSet.has(pf));
+  recomputeOffsets();
+
+  annots = kept.map(({a,pf})=> ({...a, page: (a.page - pf._oldOffset) + pf.offset}));
+  selectedItems = [];
+
+  if (!pdfFiles.length){
+    curPage = 0; totalPages = 0;
+    isDirty = false;
+    dropHint.style.display = "flex";
+    document.getElementById("btnSave").disabled = true;
+    pdfCtx.clearRect(0,0,pdfCanvas.width,pdfCanvas.height);
+    annoCtx.clearRect(0,0,annoCanvas.width,annoCanvas.height);
+    pageLabel.textContent = "- / -";
+  } else {
+    isDirty = true;
+    if (curPage>=totalPages) curPage = totalPages-1;
+    if (curPage<0) curPage = 0;
+    await renderPage();
+  }
+  renderFileChips();
+}
+
+function renderFileChips(){
+  const bar = document.getElementById("fileChipsBar");
+  const wrap = document.getElementById("fileChips");
+  wrap.innerHTML = "";
+  if (!pdfFiles.length){ bar.style.display="none"; return; }
+  bar.style.display = "flex";
+  const loc = locatePage(curPage);
+  pdfFiles.forEach((pf, idx)=>{
+    const chip = document.createElement("div");
+    chip.className = "fileChip" + (loc && loc.pf===pf ? " active" : "");
+    chip.style.display = "flex"; chip.style.alignItems = "center"; chip.style.gap = "4px";
+    const checked = pf.selected ? "checked" : "";
+    chip.innerHTML = `<input type="checkbox" class="fileChipCheck" ${checked} title="選択">
+      <span>${pf.name} (${pf.pageCount}p)</span><span class="rm" title="このPDFを取り除く">✕</span>`;
+    chip.querySelector(".fileChipCheck").onchange = (ev)=>{
+      pf.selected = ev.target.checked;
+    };
+    chip.querySelector("span:nth-child(2)").onclick = async ()=>{
+      curPage = pf.offset;
+      await renderPage();
+    };
+    chip.querySelector(".rm").onclick = async (ev)=>{
+      ev.stopPropagation();
+      if (!window.confirm(`${pf.name} をリストから外しますか？（このPDF内の注釈も削除されます）`)) return;
+      await removeFiles([pf]);
+    };
+    wrap.appendChild(chip);
+  });
+}
+
+document.getElementById("btnDeleteSelectedFiles").onclick = async ()=>{
+  const targets = pdfFiles.filter(pf=>pf.selected);
+  if (!targets.length){ setStatus("削除するPDFにチェックを入れてください"); return; }
+  if (!window.confirm(`選択した ${targets.length} 個のPDFをリストから外しますか？（該当PDF内の注釈も削除されます）`)) return;
+  await removeFiles(targets);
+};
+document.getElementById("btnClearAllFiles").onclick = async ()=>{
+  if (!pdfFiles.length) return;
+  if (!window.confirm("読み込んでいる全てのPDFを閉じますか？（保存していない変更は失われます）")) return;
+  await removeFiles(pdfFiles.slice());
+};
+
+/* ===================== アノテーション一覧パネル（読み取り専用） ===================== */
+function renderAnnotList(){
+  const panel = document.getElementById("annotListPanel");
+  const body = document.getElementById("annotListBody");
+  if (!panel || panel.style.display === "none") return; // 非表示中は描画を省略
+  if (!annots.length){
+    body.innerHTML = `<div style="color:#888;padding:6px 2px;">まだ何も配置されていません</div>`;
+    return;
+  }
+  const sorted = annots.slice().sort((a,b)=>{
+    if (a.page !== b.page) return a.page - b.page;
+    if (a.kind==="weld" && b.kind==="weld") return a.number - b.number;
+    return 0;
+  });
+  body.innerHTML = sorted.map(a=>{
+    const loc = locatePage(a.page);
+    const pageNoInFile = loc ? (loc.local+1) : (a.page+1);
+    const fileName = loc ? loc.pf.name : "";
+    let label;
+    if (a.kind==="weld") label = `🔢 No.${a.number}`;
+    else if (a.kind==="text") label = `✏ ${a.text}`;
+    else label = "📐 引き出し線";
+    const style = a.voided ? "color:#888;text-decoration:line-through;" : "color:#ddd;";
+    return `<div class="annotListItem" data-page="${a.page}" title="${fileName}"
+      style="padding:4px 4px;border-bottom:1px solid #444;cursor:pointer;font-size:12px;${style}">
+      P.${pageNoInFile}　${label}</div>`;
+  }).join("");
+  body.querySelectorAll(".annotListItem").forEach(el=>{
+    el.addEventListener("click", async ()=>{
+      const p = parseInt(el.dataset.page, 10);
+      if (p === curPage) return;
+      curPage = p;
+      await renderPage();
+    });
+  });
+}
+
+document.getElementById("btnToggleList").onclick = ()=>{
+  const panel = document.getElementById("annotListPanel");
+  const show = panel.style.display === "none";
+  panel.style.display = show ? "block" : "none";
+  if (show) renderAnnotList();
+};
+document.getElementById("btnCloseList").onclick = ()=>{
+  document.getElementById("annotListPanel").style.display = "none";
+};
+
+/* ===================== 描画 ===================== */
+async function renderPage(){
+  if (!pdfFiles.length) return;
+  const loc = locatePage(curPage);
+  if (!loc) return;
+  // 変更理由: ページ切替(次ページ/前ページ/ファイル切替/一覧からのジャンプ等)は
+  // curPageの更新が同期的に行われる一方、実際の描画(page.getPage/render)は非同期のため、
+  // 「curPageはもう新しいページなのに、curViewport(クリック座標の変換に使う)はまだ
+  // 古いページのまま」という一瞬のズレが発生し得る。この間にキャンバスをタップすると、
+  // 古いページ基準で座標変換された位置が新しいページ番号のアノテーションとして
+  // 保存されてしまい、「別ページ／別ファイルに貼り付けたのに反映されない（＝見当たらない
+  // 位置に飛んでいる）」という不具合の原因になっていた。
+  // 読み込みが完了するまでcurViewportをnullにしておき、その間のクリックは
+  // (mousedown/dblclick側のガードで)無視されるようにすることでこれを防ぐ。
+  curViewport = null;
+  const page = await loc.pf.pdfjsDoc.getPage(loc.local+1);
+  const viewport = page.getViewport({ scale: zoom });          // クリック座標変換用（CSSピクセル基準）
+  canvasScale = Math.max(zoom, RENDER_MIN_ZOOM) / zoom * dpr;   // 低ズームでも一定解像度を保つための倍率
+  const renderViewport = page.getViewport({ scale: zoom*canvasScale }); // 描画解像度用
+  curViewport = viewport;
+
+  pdfCanvas.width = renderViewport.width;
+  pdfCanvas.height = renderViewport.height;
+  pdfCanvas.style.width = viewport.width+"px";
+  pdfCanvas.style.height = viewport.height+"px";
+  annoCanvas.width = renderViewport.width;
+  annoCanvas.height = renderViewport.height;
+  annoCanvas.style.width = viewport.width+"px";
+  annoCanvas.style.height = viewport.height+"px";
+  stage.style.width = viewport.width+"px";
+  stage.style.height = viewport.height+"px";
+
+  // 読み込み時点で本ツール由来のアノテーション(WT-)は取り除いた「表示専用コピー」を
+  // pdf.jsに渡しているため、ここでは既定の描画(他社アプリ由来の注釈も含めて表示)に戻す。
+  await page.render({ canvasContext: pdfCtx, viewport: renderViewport }).promise;
+
+  annoCtx.setTransform(1,0,0,1,0,0);
+  annoCtx.scale(canvasScale,canvasScale);
+  redrawAnnotations();
+  pageLabel.textContent = `${curPage+1} / ${totalPages}  (${loc.pf.name}: ${loc.local+1}/${loc.pf.pageCount})`;
+  renderFileChips();
+}
+
+function redrawAnnotations(){
+  annoCtx.clearRect(0,0,annoCanvas.width/canvasScale, annoCanvas.height/canvasScale);
+  const pageAnnots = annots.filter(a=>a.page===curPage);
+  for (const a of pageAnnots){
+    drawAnnotation(a);
+  }
+  // 採番/テキスト追加：始点(+折れ点)からのラバーバンド線プレビュー
+  if ((waitingStart && startPdf) || (numPolyMode && numPolyPts.length)){
+    const basePts = numPolyMode ? numPolyPts : [startPdf];
+    annoCtx.save();
+    annoCtx.strokeStyle = colorInput.value;
+    annoCtx.lineWidth = parseFloat(lwInput.value);
+    annoCtx.beginPath();
+    basePts.forEach(([px,py],i)=>{
+      const [vx,vy] = curViewport.convertToViewportPoint(px,py);
+      if (i===0) annoCtx.moveTo(vx,vy); else annoCtx.lineTo(vx,vy);
+    });
+    if (numLineMouseCur){
+      const [vx,vy] = curViewport.convertToViewportPoint(numLineMouseCur[0], numLineMouseCur[1]);
+      annoCtx.setLineDash([4,3]);
+      annoCtx.lineTo(vx,vy);
+    }
+    annoCtx.stroke();
+    annoCtx.setLineDash([]);
+    basePts.forEach(([px,py])=>{
+      const [vx,vy] = curViewport.convertToViewportPoint(px,py);
+      annoCtx.fillStyle = colorInput.value;
+      annoCtx.beginPath(); annoCtx.arc(vx,vy,2.5,0,Math.PI*2); annoCtx.fill();
+    });
+    // 次に置かれる番号のプレビュー（テキストの場合は表示しない）
+    if (mode==="add_weld" && numLineMouseCur){
+      const [vx,vy] = curViewport.convertToViewportPoint(numLineMouseCur[0], numLineMouseCur[1]);
+      const r = parseFloat(crInput.value), fs = parseFloat(fsInput.value);
+      annoCtx.globalAlpha = 0.6;
+      annoCtx.fillStyle = "#ffffff";
+      annoCtx.beginPath(); annoCtx.arc(vx,vy,r,0,Math.PI*2); annoCtx.fill(); annoCtx.stroke();
+      annoCtx.fillStyle = colorInput.value;
+      annoCtx.font = `${fs}px ${cssFontFamily(fontSelect.value)}`;
+      annoCtx.textAlign = "center"; annoCtx.textBaseline = "middle";
+      annoCtx.fillText(String(curPage in nextNumByPage ? nextNumByPage[curPage] : (parseInt(startNumInput.value)||1)), vx, vy+1);
+      annoCtx.globalAlpha = 1;
+    }
+    annoCtx.restore();
+  }
+  // 採番/テキスト追加：長押しドラッグによる範囲選択プレビュー
+  if (numDragRect && numRangeStartPdf && numRangeCurPdf){
+    const [vx1,vy1] = curViewport.convertToViewportPoint(numRangeStartPdf[0], numRangeStartPdf[1]);
+    const [vx2,vy2] = curViewport.convertToViewportPoint(numRangeCurPdf[0], numRangeCurPdf[1]);
+    annoCtx.save();
+    annoCtx.strokeStyle = "#cc44ff";
+    annoCtx.fillStyle = "rgba(204,68,255,0.15)";
+    annoCtx.lineWidth = 1;
+    annoCtx.setLineDash([5,3]);
+    const rx = Math.min(vx1,vx2), ry = Math.min(vy1,vy2);
+    const rw = Math.abs(vx2-vx1), rh = Math.abs(vy2-vy1);
+    annoCtx.fillRect(rx,ry,rw,rh);
+    annoCtx.strokeRect(rx,ry,rw,rh);
+    annoCtx.restore();
+  }
+  if (drawingLine && drawingLine.pts.length){
+    annoCtx.save();
+    annoCtx.strokeStyle = colorInput.value;
+    annoCtx.lineWidth = parseFloat(lwInput.value);
+    annoCtx.setLineDash([]);
+    annoCtx.beginPath();
+    drawingLine.pts.forEach(([px,py],i)=>{
+      const [vx,vy] = curViewport.convertToViewportPoint(px,py);
+      if (i===0) annoCtx.moveTo(vx,vy); else annoCtx.lineTo(vx,vy);
+    });
+    if (lineMouseCur){
+      const [vx,vy] = curViewport.convertToViewportPoint(lineMouseCur[0], lineMouseCur[1]);
+      annoCtx.setLineDash([4,3]);
+      annoCtx.lineTo(vx,vy);
+    }
+    annoCtx.stroke();
+    drawingLine.pts.forEach(([px,py])=>{
+      const [vx,vy] = curViewport.convertToViewportPoint(px,py);
+      annoCtx.fillStyle = colorInput.value;
+      annoCtx.beginPath(); annoCtx.arc(vx,vy,2.5,0,Math.PI*2); annoCtx.fill();
+    });
+    annoCtx.restore();
+  }
+  if (rangeSelecting && rangeStartPdf && rangeCurPdf){
+    const [vx1,vy1] = curViewport.convertToViewportPoint(rangeStartPdf[0], rangeStartPdf[1]);
+    const [vx2,vy2] = curViewport.convertToViewportPoint(rangeCurPdf[0], rangeCurPdf[1]);
+    annoCtx.save();
+    annoCtx.strokeStyle = "#3ea6ff";
+    annoCtx.fillStyle = "rgba(62,166,255,0.15)";
+    annoCtx.lineWidth = 1;
+    annoCtx.setLineDash([5,3]);
+    const rx = Math.min(vx1,vx2), ry = Math.min(vy1,vy2);
+    const rw = Math.abs(vx2-vx1), rh = Math.abs(vy2-vy1);
+    annoCtx.fillRect(rx,ry,rw,rh);
+    annoCtx.strokeRect(rx,ry,rw,rh);
+    annoCtx.restore();
+  }
+  renderAnnotList();
+}
+
+function cssFontFamily(key){
+  if (key==="mincho") return '"Yu Mincho","Hiragino Mincho ProN",serif';
+  if (key==="helv") return 'Helvetica, Arial, sans-serif';
+  if (key==="courier") return '"Courier New", Courier, monospace';
+  return '"Yu Gothic","Hiragino Sans",sans-serif'; // gothic (既定)
+}
+
+function drawAnnotation(a){
+  if (a.kind === "line"){
+    const color = a.voided ? "#999999" : a.color;
+    annoCtx.save();
+    annoCtx.strokeStyle = color;
+    annoCtx.lineWidth = a.lw;
+    annoCtx.beginPath();
+    a.points.forEach(([px,py],i)=>{
+      const [vx,vy] = curViewport.convertToViewportPoint(px,py);
+      if (i===0) annoCtx.moveTo(vx,vy); else annoCtx.lineTo(vx,vy);
+    });
+    annoCtx.stroke();
+    if (selectedItems.includes(a)){
+      annoCtx.strokeStyle = "#3ea6ff";
+      annoCtx.lineWidth = 3;
+      annoCtx.setLineDash([4,3]);
+      annoCtx.stroke();
+      annoCtx.setLineDash([]);
+    }
+    annoCtx.restore();
+    return;
+  }
+
+  const [vx, vy] = curViewport.convertToViewportPoint(a.x, a.y);
+  const color = a.voided ? "#999999" : a.color;
+  annoCtx.save();
+  annoCtx.strokeStyle = color;
+  annoCtx.fillStyle = "#ffffff";
+  annoCtx.lineWidth = a.lw;
+
+  // 番号/テキストに紐づく引き出し線（始点→（折れ点）→番号位置）
+  if (a.points && a.points.length){
+    annoCtx.beginPath();
+    const full = [...a.points, [a.x, a.y]];
+    full.forEach(([px,py], i)=>{
+      const [lvx,lvy] = curViewport.convertToViewportPoint(px,py);
+      if (i===0) annoCtx.moveTo(lvx,lvy); else annoCtx.lineTo(lvx,lvy);
+    });
+    annoCtx.stroke();
+  }
+
+  if (a.kind === "weld"){
+    annoCtx.beginPath();
+    annoCtx.arc(vx, vy, a.r, 0, Math.PI*2);
+    annoCtx.fill();
+    annoCtx.stroke();
+    if (a.voided){
+      annoCtx.beginPath();
+      annoCtx.moveTo(vx-a.r*0.75, vy);
+      annoCtx.lineTo(vx+a.r*0.75, vy);
+      annoCtx.stroke();
+    }
+    annoCtx.fillStyle = color;
+    annoCtx.font = `${a.fs}px ${cssFontFamily(a.font)}`;
+    annoCtx.textAlign = "center";
+    annoCtx.textBaseline = "middle";
+    annoCtx.fillText(String(a.number), vx, vy+1);
+  } else {
+    annoCtx.font = `${a.fs}px ${cssFontFamily(a.font)}`;
+    const tw = annoCtx.measureText(a.text).width;
+    const bw = tw+12, bh = a.fs+10;
+    annoCtx.fillRect(vx-bw/2, vy-bh/2, bw, bh);
+    annoCtx.strokeRect(vx-bw/2, vy-bh/2, bw, bh);
+    if (a.voided){
+      annoCtx.beginPath();
+      annoCtx.moveTo(vx-bw/2+2, vy);
+      annoCtx.lineTo(vx+bw/2-2, vy);
+      annoCtx.stroke();
+    }
+    annoCtx.fillStyle = color;
+    annoCtx.textAlign = "center";
+    annoCtx.textBaseline = "middle";
+    annoCtx.fillText(a.text, vx, vy+1);
+  }
+
+  if (selectedItems.includes(a)){
+    annoCtx.strokeStyle = "#3ea6ff";
+    annoCtx.lineWidth = 1.5;
+    annoCtx.setLineDash([4,3]);
+    const rr = (a.kind==="weld") ? a.r+6 : Math.max(a.r, annoCtx.measureText(a.kind==="weld"?String(a.number):a.text).width/2)+8;
+    annoCtx.strokeRect(vx-rr, vy-rr, rr*2, rr*2);
+    annoCtx.setLineDash([]);
+  }
+  annoCtx.restore();
+}
+
+/* ===================== モード切替 ===================== */
+document.querySelectorAll('input[name="mode"]').forEach(r=>{
+  r.addEventListener("change", e=>{
+    const prevMode = mode;
+    mode = e.target.value;
+    document.querySelectorAll("label.radio").forEach(l=>l.classList.remove("active"));
+    e.target.closest("label").classList.add("active");
+
+    if (prevMode==="add_line" && drawingLine){ drawingLine=null; lineMouseCur=null; }
+    rangeSelecting = false; rangeStartPdf=null; rangeCurPdf=null;
+    waitingStart=false; startPdf=null; startClient=null;
+    numPolyMode=false; numPolyPts=[]; numLineMouseCur=null;
+    pressInfo=null; numDragRect=false; numRangeStartPdf=null; numRangeCurPdf=null;
+
+    // select / range_select 間では選択状態を維持。それ以外のモードに移る時はクリア
+    if (!(mode==="select" || mode==="range_select")){
+      selectedItems = [];
+    }
+    redrawAnnotations();
+  });
+});
+
+document.querySelectorAll('input[name="delMode"]').forEach(r=>{
+  r.addEventListener("change", e=>{ deleteRenumberMode = e.target.value; });
+});
+
+/* ===================== スタイルバー ===================== */
+function currentStyle(){
+  return {
+    lw: parseFloat(lwInput.value),
+    r: parseFloat(crInput.value),
+    fs: parseFloat(fsInput.value),
+    color: colorInput.value,
+    font: fontSelect.value
+  };
+}
+[lwInput, crInput, fsInput, colorInput, fontSelect].forEach(inp=>{
+  inp.addEventListener("input", ()=>{
+    if (selectedItems.length){
+      const s = currentStyle();
+      selectedItems.forEach(sel=>{
+        sel.lw = s.lw; sel.color = s.color;
+        if (sel.kind !== "line"){ sel.r = s.r; sel.fs = s.fs; sel.font = s.font; }      });
+      redrawAnnotations();
+    }
+  });
+});
+
+document.getElementById("btnApplyStyle").onclick = ()=>{
+  if (!selectedItems.length){ setStatus("適用するアノテーションを選択してください"); return; }
+  pushUndo();
+  const s = currentStyle();
+  selectedItems.forEach(sel=>{
+    sel.lw = s.lw; sel.color = s.color;
+    if (sel.kind !== "line"){ sel.r = s.r; sel.fs = s.fs; sel.font = s.font; }
+  });
+  redrawAnnotations();
+  setStatus(`${selectedItems.length}個にスタイルを適用しました`);
+};
+
+document.querySelectorAll(".colorPresetBtn").forEach(btn=>{
+  btn.addEventListener("click", ()=>{
+    colorInput.value = btn.dataset.color;
+    colorInput.dispatchEvent(new Event("input"));
+  });
+});
+
+/* ===================== 採番ロジック ===================== */
+/* 保存済みPDFの再読込などで、あるページの次の採番数字をannotsの実データから
+   再計算する（欠番があっても既存の最大番号+1にするため安全側に倒している） */
+function recalcNextNumForPage(page){
+  const nums = annots.filter(a=>a.page===page && a.kind==="weld").map(a=>a.number);
+  nextNumByPage[page] = (nums.length ? Math.max(...nums) : 0) + 1;
+}
+
+function nextNumberFor(page){
+  if (!(page in nextNumByPage)) nextNumByPage[page] = parseInt(startNumInput.value)||1;
+  const n = nextNumByPage[page];
+  nextNumByPage[page] = n+1;
+  return n;
+}
+
+/* 指定したページ群について、そのページ上の溶接番号を詰め直す（deleteRenumberModeが
+   "renumber"なら1から連番に、"keep"なら最大値+1をカウンタにセットするだけ）。
+   削除時だけでなく、「移動」で該当ページから項目が居なくなった場合にも使う。 */
+function renumberPagesAfterRemoval(affectedPages){
+  affectedPages.forEach(page=>{
+    const weldOnPage = annots.filter(a=>a.page===page && a.kind==="weld")
+                              .sort((a,b)=>a.number-b.number);
+    if (deleteRenumberMode === "renumber"){
+      weldOnPage.forEach((a,i)=>{ a.number = i+1; });
+      nextNumByPage[page] = weldOnPage.length+1;
+    } else {
+      // 「欠番のまま」でも、Python版と同様にカウンタは残った番号の最大値+1へ
+      // （無ければ開始番号欄の値）に付け直す
+      nextNumByPage[page] = weldOnPage.length
+        ? Math.max(...weldOnPage.map(a=>a.number))+1
+        : (parseInt(startNumInput.value)||1);
+    }
+  });
+}
+
+/* 削除処理の共通ヘルパー。deleteRenumberModeが"renumber"なら、削除で生じた
+   欠番を詰めてページごとに1から振り直す。呼び出し側でpushUndo()は済ませておくこと。 */
+function removeAnnotsWithRenumber(toRemove){
+  const removeSet = new Set(toRemove);
+  const affectedPages = new Set(toRemove.filter(a=>a.kind==="weld").map(a=>a.page));
+  annots = annots.filter(a=>!removeSet.has(a));
+  renumberPagesAfterRemoval(affectedPages);
+}
+
+document.getElementById("btnApplyStart").onclick = ()=>{
+  const v = parseInt(startNumInput.value)||1;
+  nextNumByPage[curPage] = v;
+  setStatus(`このページの次の番号を ${v} に設定しました`);
+};
+
+document.getElementById("btnResetPage").onclick = ()=>{
+  pushUndo();
+  const pageAnnots = annots.filter(a=>a.page===curPage && a.kind==="weld")
+                            .sort((a,b)=>a.number-b.number);
+  pageAnnots.forEach((a,i)=>{ a.number = i+1; });
+  nextNumByPage[curPage] = pageAnnots.length+1;
+  redrawAnnotations();
+  setStatus("このページの溶接番号を振り直しました");
+};
+
+/* ===================== undo / redo ===================== */
+function snapshot(){
+  return { annots: JSON.parse(JSON.stringify(annots)), nextNumByPage: JSON.parse(JSON.stringify(nextNumByPage)) };
+}
+function pushUndo(){
+  undoStack.push(snapshot());
+  redoStack = [];
+  updateUndoRedoButtons();
+  isDirty = true;
+}
+function restore(snap){
+  annots = snap.annots;
+  nextNumByPage = snap.nextNumByPage;
+  selectedItems = [];
+  redrawAnnotations();
+}
+function updateUndoRedoButtons(){
+  document.getElementById("btnUndo").disabled = undoStack.length===0;
+  document.getElementById("btnRedo").disabled = redoStack.length===0;
+}
+document.getElementById("btnUndo").onclick = ()=>{
+  if (!undoStack.length) return;
+  redoStack.push(snapshot());
+  restore(undoStack.pop());
+  updateUndoRedoButtons();
+  isDirty = true;
+  setStatus("元に戻しました");
+};
+document.getElementById("btnRedo").onclick = ()=>{
+  if (!redoStack.length) return;
+  undoStack.push(snapshot());
+  restore(redoStack.pop());
+  updateUndoRedoButtons();
+  isDirty = true;
+  setStatus("やり直しました");
+};
+
+/* ===================== キャンバス操作 ===================== */
+function distToSegment(px,py, x1,y1, x2,y2){
+  const dx=x2-x1, dy=y2-y1;
+  const len2 = dx*dx+dy*dy;
+  let t = len2===0 ? 0 : ((px-x1)*dx+(py-y1)*dy)/len2;
+  t = Math.max(0, Math.min(1, t));
+  const cx = x1+t*dx, cy = y1+t*dy;
+  return Math.hypot(px-cx, py-cy);
+}
+
+/* 戻り値: {annot, type} type="end"(番号/テキスト本体) | "all"(引き出し線・単独線) | "line"(単独引き出し線モードの線) */
+function hitTest(px, py){
+  // ヒットの許容範囲はズームに応じてPDF座標系でのピクセル相当に換算
+  const tol = 6/zoom;
+  const pageAnnots = annots.filter(a=>a.page===curPage);
+
+  // 1) まず番号/テキスト本体（丸・箱）へのヒットを優先判定
+  for (let i=pageAnnots.length-1; i>=0; i--){
+    const a = pageAnnots[i];
+    if (a.kind === "line") continue;
+    const dx = a.x-px, dy = a.y-py;
+    const dist = Math.sqrt(dx*dx+dy*dy);
+    const radius = a.kind==="weld" ? a.r+4 : Math.max(a.r, (a.text.length*a.fs*0.5))+6;
+    if (dist <= radius) return {annot:a, type:"end"};
+  }
+
+  // 2) 次に引き出し線（番号に紐づくpoints、または単独引き出し線）へのヒットを判定
+  for (let i=pageAnnots.length-1; i>=0; i--){
+    const a = pageAnnots[i];
+    let segs = null;
+    if (a.kind === "line"){
+      segs = a.points;
+    } else if (a.points && a.points.length){
+      segs = [...a.points, [a.x, a.y]];
+    }
+    if (!segs || segs.length < 2) continue;
+    for (let k=0;k<segs.length-1;k++){
+      const [x1,y1]=segs[k], [x2,y2]=segs[k+1];
+      if (distToSegment(px,py,x1,y1,x2,y2) <= tol+a.lw){
+        return {annot:a, type: a.kind==="line" ? "line" : "all"};
+      }
+    }
+  }
+  return null;
+}
+
+/* Python版の _nearest_on_page 相当：中心点との距離が最も近いアノテを探す（線分は見ない） */
+function nearestOnPage(px, py, maxDistPx){
+  const maxDist = (maxDistPx===undefined ? 60 : maxDistPx) / zoom; // 60画面px相当をPDF単位に換算
+  const pageAnnots = annots.filter(a=>a.page===curPage && a.kind!=="line");
+  if (!pageAnnots.length) return null;
+  let best = null, bestD = Infinity;
+  for (const a of pageAnnots){
+    const d = Math.hypot(a.x-px, a.y-py);
+    if (d < bestD){ bestD = d; best = a; }
+  }
+  return (best && bestD <= maxDist) ? best : null;
+}
+
+function itemsInRect(pMin, pMax){
+  const [x1,y1]=pMin, [x2,y2]=pMax;
+  const xlo=Math.min(x1,x2), xhi=Math.max(x1,x2);
+  const ylo=Math.min(y1,y2), yhi=Math.max(y1,y2);
+  return annots.filter(a=>{
+    if (a.page!==curPage) return false;
+    if (a.kind==="line"){
+      return a.points.some(([px,py])=> px>=xlo && px<=xhi && py>=ylo && py<=yhi);
+    }
+    return a.x>=xlo && a.x<=xhi && a.y>=ylo && a.y<=yhi;
+  });
+}
+
+function clientToPdf(e){
+  const rect = annoCanvas.getBoundingClientRect();
+  const cx = e.clientX - rect.left;
+  const cy = e.clientY - rect.top;
+  return curViewport.convertToPdfPoint(cx, cy);
+}
+
+function origPosOf(a){
+  return a.kind==="line"
+    ? a.points.map(p=>[...p])
+    : { x:a.x, y:a.y, points: a.points ? a.points.map(p=>[...p]) : null };
+}
+function applyDragDelta(a, orig, type, dx, dy){
+  if (a.kind==="line"){
+    a.points = orig.map(([ox,oy])=>[ox+dx, oy+dy]);
+    return;
+  }
+  a.x = orig.x + dx; a.y = orig.y + dy;
+  if (type==="all" && orig.points){
+    a.points = orig.points.map(([ox,oy])=>[ox+dx, oy+dy]);
+  }
+}
+function syncStyleBarFrom(hit){
+  if (hit.kind !== "line"){
+    lwInput.value = hit.lw; crInput.value = hit.r; fsInput.value = hit.fs; colorInput.value = hit.color;
+    fontSelect.value = hit.font || "gothic";
+  } else {
+    lwInput.value = hit.lw; colorInput.value = hit.color;
+  }
+}
+function startDragOn(hitObj, px, py, forceAll){
+  const {annot, type} = hitObj;
+  const isGroup = selectedItems.includes(annot) && selectedItems.length>1;
+  if (!isGroup){ selectedItems = [annot]; syncStyleBarFrom(annot); }
+  pushUndo();
+  dragging = true;
+  dragStartPdf = [px,py];
+  dragOrigPositions = selectedItems.map(origPosOf);
+  dragHitTypes = selectedItems.map(()=> (isGroup || forceAll) ? "all" : type);
+  redrawAnnotations();
+}
+
+annoCanvas.addEventListener("mousedown", e=>{
+  if (!pdfFiles.length) return;
+  if (e.button !== 0) return;   // 中クリック等はパン操作に譲る
+  if (!curViewport) return;     // ページ読み込み中（座標変換の基準がまだ古いページのまま）は無視
+  const [px, py] = clientToPdf(e);
+
+  // 基点指定コピー／移動：基点クリック待ち
+  if (basePickMode){ confirmBasePick(px, py); return; }
+  // 貼り付け位置クリック待ち
+  if (pasteMode){ doPasteAt(px, py); return; }
+
+  // Ctrl+クリック：個別に選択追加／解除（モード共通）
+  if (e.ctrlKey){
+    const h = hitTest(px, py);
+    if (h){
+      const idx = selectedItems.indexOf(h.annot);
+      if (idx>=0) selectedItems.splice(idx,1); else selectedItems.push(h.annot);
+      redrawAnnotations();
+      setStatus(`${selectedItems.length}個を選択中`);
+    }
+    return;
+  }
+
+  if (mode === "add_weld" || mode === "add_text"){
+    // 既存アイテムにヒットしたらドラッグ移動へ
+    if (!waitingStart && !numPolyMode){
+      const h = hitTest(px, py);
+      if (h){ startDragOn(h, px, py); return; }
+    }
+
+    // 折れ点モード中
+    if (numPolyMode){
+      if (e.shiftKey){
+        numPolyPts.push([px,py]);
+        redrawAnnotations();
+        setStatus(`折れ点 ${numPolyPts.length} 個（Shift+クリックで追加／通常クリックかEnterで確定／Escで取消）`);
+      } else {
+        finishNumberOrText(mode, numPolyPts, px, py);
+        numPolyMode = false; numPolyPts = []; numLineMouseCur = null;
+      }
+      return;
+    }
+
+    // 始点待ち中（終点 or 折れ点への移行）
+    if (waitingStart){
+      if (e.shiftKey){
+        numPolyPts = [startPdf, [px,py]];
+        numPolyMode = true;
+        waitingStart = false; startPdf = null; startClient = null;
+        redrawAnnotations();
+        setStatus(`折れ点 ${numPolyPts.length} 個（Shift+クリックで追加／通常クリックかEnterで確定／Escで取消）`);
+      } else {
+        const dist = Math.hypot(e.clientX-startClient.x, e.clientY-startClient.y);
+        const points = dist < 8 ? [] : [startPdf];
+        waitingStart = false; startPdf = null; startClient = null; numLineMouseCur = null;
+        finishNumberOrText(mode, points, px, py);
+      }
+      return;
+    }
+
+    // 1クリック目
+    if (e.shiftKey){
+      numPolyPts = [[px,py]];
+      numPolyMode = true;
+      redrawAnnotations();
+      setStatus("折れ点 1 個（Shift+クリックで追加／通常クリックかEnterで確定／Escで取消）");
+    } else {
+      // 長押し判定用に記録。始点確定はmouseupで行う
+      pressInfo = { time: performance.now(), clientX: e.clientX, clientY: e.clientY };
+    }
+    return;
+  }
+  if (mode === "delete"){
+    const near = nearestOnPage(px, py);
+    if (near){
+      pushUndo();
+      removeAnnotsWithRenumber([near]);
+      redrawAnnotations();
+      setStatus("削除しました");
+    }
+    return;
+  }
+  if (mode === "add_line"){
+    if (!drawingLine) drawingLine = {pts:[]};
+    drawingLine.pts.push([px,py]);
+    redrawAnnotations();
+    setStatus(`引き出し線: 頂点 ${drawingLine.pts.length} 個（ダブルクリックで確定／Escで取消）`);
+    return;
+  }
+  if (mode === "range_select"){
+    rangeSelecting = true;
+    rangeStartPdf = [px,py];
+    rangeCurPdf = [px,py];
+    return;
+  }
+  if (mode === "select"){
+    const near = nearestOnPage(px, py);
+    if (!near){ setStatus("近くにアノテーションがありません"); return; }
+    pushUndo();
+    near.voided = !near.voided;
+    redrawAnnotations();
+    setStatus(near.voided ? "欠番にしました（もう一度クリックで解除）" : "欠番を解除しました");
+  }
+});
+
+/* 採番/テキスト追加の確定処理。points は始点(+折れ点)の配列（終点は含まない） */
+function finishNumberOrText(mode, points, endX, endY){
+  if (mode === "add_weld"){
+    pushUndo();
+    const s = currentStyle();
+    const num = nextNumberFor(curPage);
+    annots.push({page:curPage, kind:"weld", x:endX, y:endY, number:num,
+                 points: points.length ? points : undefined, ...s, voided:false});
+    redrawAnnotations();
+    setStatus(`溶接番号 ${num} を配置しました`);
+  } else {
+    const text = window.prompt("追加するテキスト:", "");
+    if (text === null || text.trim()===""){ redrawAnnotations(); return; }
+    pushUndo();
+    const s = currentStyle();
+    annots.push({page:curPage, kind:"text", x:endX, y:endY, text:text,
+                 points: points.length ? points : undefined, ...s, voided:false});
+    redrawAnnotations();
+    setStatus("テキストを追加しました");
+  }
+}
+
+annoCanvas.addEventListener("dblclick", e=>{
+  if (mode==="add_line" && drawingLine){
+    if (drawingLine.pts.length >= 2){
+      const s = currentStyle();
+      annots.push({page:curPage, kind:"line", points:drawingLine.pts, color:s.color, lw:s.lw, voided:false});
+      pushUndo_lineFinish();
+      setStatus("引き出し線を確定しました");
+    }
+    drawingLine = null; lineMouseCur = null;
+    redrawAnnotations();
+    return;
+  }
+  if (mode==="select"){
+    if (!curViewport) return;
+    const [px, py] = clientToPdf(e);
+    const h = hitTest(px, py);
+    if (!h || h.annot.kind==="line") return;
+    const hit = h.annot;
+    if (hit.kind==="weld"){
+      const input = window.prompt("番号を編集:", String(hit.number));
+      if (input===null) return;
+      const v = parseInt(input, 10);
+      if (!Number.isFinite(v) || v<1) return;
+      pushUndo();
+      hit.number = v;
+      redrawAnnotations();
+      setStatus(`番号を ${v} に変更しました`);
+    } else {
+      const input = window.prompt("テキストを編集:", hit.text);
+      if (input===null || input.trim()==="") return;
+      pushUndo();
+      hit.text = input;
+      redrawAnnotations();
+      setStatus("テキストを変更しました");
+    }
+  }
+});
+function pushUndo_lineFinish(){
+  // 確定直前の状態(線追加前)を積みたいが、簡易実装のため追加後スナップショットとの整合を保つ形でここではundo対象は「追加操作そのもの」とする
+  const snap = snapshot();
+  // 直前状態を再現するため、線を除いた状態を積む
+  const withoutLast = { annots: snap.annots.slice(0,-1), nextNumByPage: snap.nextNumByPage };
+  undoStack.push(withoutLast);
+  redoStack = [];
+  updateUndoRedoButtons();
+}
+
+annoCanvas.addEventListener("mousemove", e=>{
+  // PDFがまだ読み込まれていない(=curViewportが無い)うちにマウスを動かすと
+  // clientToPdf()内のcurViewport.convertToPdfPoint()でエラーになっていたため、
+  // その場合は何もせず抜ける（コンソールにエラーが大量に出ていた原因）
+  if (!curViewport) return;
+  const [px, py] = clientToPdf(e);
+
+  if (pasteMode){
+    updatePastePreview(px,py); return;
+  }
+
+  // 採番/テキスト追加モード：長押しドラッグを判定し、範囲選択プレビューへ切替
+  if ((mode==="add_weld" || mode==="add_text") && pressInfo && !waitingStart && !numPolyMode && !dragging){
+    const dist = Math.hypot(e.clientX-pressInfo.clientX, e.clientY-pressInfo.clientY);
+    const elapsed = performance.now() - pressInfo.time;
+    if (!numDragRect && dist > DRAG_THRESHOLD_PX && elapsed >= LONG_PRESS_MS){
+      numDragRect = true;
+      const rect = annoCanvas.getBoundingClientRect();
+      numRangeStartPdf = curViewport.convertToPdfPoint(pressInfo.clientX-rect.left, pressInfo.clientY-rect.top);
+    }
+    if (numDragRect){
+      numRangeCurPdf = [px,py];
+      redrawAnnotations();
+      return;
+    }
+  }
+
+  // 採番/テキスト追加モード：始点/折れ点からのラバーバンド線プレビュー
+  if ((mode==="add_weld" || mode==="add_text") && (waitingStart || numPolyMode)){
+    numLineMouseCur = [px,py];
+    redrawAnnotations();
+    return;
+  }
+
+  if (mode==="add_line" && drawingLine){
+    lineMouseCur = [px,py];
+    redrawAnnotations();
+    return;
+  }
+  if (mode==="range_select" && rangeSelecting){
+    rangeCurPdf = [px,py];
+    redrawAnnotations();
+    return;
+  }
+  if (dragging && selectedItems.length){
+    const dx = px - dragStartPdf[0], dy = py - dragStartPdf[1];
+    selectedItems.forEach((a,i)=>{
+      applyDragDelta(a, dragOrigPositions[i], dragHitTypes[i], dx, dy);
+    });
+    redrawAnnotations();
+  }
+});
+window.addEventListener("mouseup", e=>{
+  if (e.button !== 0) return;
+  dragging = false; dragOrigPositions = null; dragHitTypes = null;
+
+  if (numDragRect){
+    numDragRect = false; pressInfo = null;
+    if (numRangeStartPdf && numRangeCurPdf){
+      const found = itemsInRect(numRangeStartPdf, numRangeCurPdf);
+      selectedItems = found;
+      setStatus(`${found.length} 個のアイテムを選択しました`);
+    }
+    numRangeStartPdf = null; numRangeCurPdf = null;
+    redrawAnnotations();
+    return;
+  }
+  if (pressInfo && (mode==="add_weld" || mode==="add_text") && !waitingStart && !numPolyMode){
+    // 長押しにならなかった短いクリック → 始点を確定し終点待ちへ
+    if (selectedItems.length){ selectedItems = []; }
+    waitingStart = true;
+    startClient = { x: pressInfo.clientX, y: pressInfo.clientY };
+    const rect = annoCanvas.getBoundingClientRect();
+    startPdf = curViewport.convertToPdfPoint(pressInfo.clientX-rect.left, pressInfo.clientY-rect.top);
+    pressInfo = null;
+    redrawAnnotations();
+    setStatus("始点を配置しました／クリックで終点確定（同位置なら線なし）／Shift+クリックで折れ点／Escで取消");
+    return;
+  }
+  pressInfo = null;
+
+  if (rangeSelecting){
+    rangeSelecting = false;
+    if (rangeStartPdf && rangeCurPdf){
+      const found = itemsInRect(rangeStartPdf, rangeCurPdf);
+      selectedItems = found;
+      setStatus(`${found.length} 個のアイテムを選択しました`);
+    }
+    rangeStartPdf = null; rangeCurPdf = null;
+    redrawAnnotations();
+  }
+});
+
+/* ===================== 右クリックメニュー：基点指定コピー／移動 ===================== */
+function hideContextMenu(){
+  if (paletteMenuEl){ paletteMenuEl.remove(); paletteMenuEl = null; }
+}
+function showContextMenu(x, y, items){
+  hideContextMenu();
+  const menu = document.createElement("div");
+  menu.style.cssText = `position:fixed;left:${x}px;top:${y}px;background:#3c3c3c;border:1px solid #555;
+    border-radius:4px;padding:4px 0;z-index:9999;min-width:180px;box-shadow:0 4px 14px rgba(0,0,0,.5);font-size:12px;`;
+  items.forEach(it=>{
+    const row = document.createElement("div");
+    row.textContent = it.label;
+    row.style.cssText = `padding:7px 14px;color:${it.enabled?'#fff':'#777'};cursor:${it.enabled?'pointer':'default'};`;
+    if (it.enabled){
+      row.addEventListener("mouseenter", ()=> row.style.background="#555");
+      row.addEventListener("mouseleave", ()=> row.style.background="");
+      row.addEventListener("click", ()=>{ hideContextMenu(); it.onClick(); });
+    }
+    menu.appendChild(row);
+  });
+  document.body.appendChild(menu);
+  paletteMenuEl = menu;
+  setTimeout(()=>{ document.addEventListener("click", hideContextMenu, {once:true}); }, 0);
+}
+
+annoCanvas.addEventListener("contextmenu", e=>{
+  if (!pdfFiles.length) return;
+  e.preventDefault();
+  if (!curViewport) return;     // ページ読み込み中は無視
+  const [px, py] = clientToPdf(e);
+
+  if (mode === "select"){
+    const near = nearestOnPage(px, py);
+    if (near && near.voided){
+      pushUndo();
+      near.voided = false;
+      redrawAnnotations();
+      setStatus("欠番を解除しました");
+    }
+    return;
+  }
+
+  const h = hitTest(px, py);
+  if (h && !selectedItems.includes(h.annot)) selectedItems = [h.annot];
+  redrawAnnotations();
+  const hasSel = selectedItems.length > 0;
+  showContextMenu(e.clientX, e.clientY, [
+    { label:"基点を指定してコピー", enabled:hasSel, onClick:()=>startBasePick("copy") },
+    { label:"削除", enabled:hasSel, onClick:()=>{
+        pushUndo(); removeAnnotsWithRenumber(selectedItems); selectedItems=[]; redrawAnnotations(); setStatus("削除しました");
+      } },
+    { label:"基点を指定して移動", enabled:hasSel, onClick:()=>startBasePick("move") },
+    { label:"キャンセル", enabled:true, onClick:()=>{ selectedItems=[]; redrawAnnotations(); } },
+  ]);
+});
+
+function startBasePick(kind){
+  if (!selectedItems.length){ setStatus("対象を選択してください"); return; }
+  basePickMode = kind;
+  setStatus(`${selectedItems.length}個を選択中／基点をクリックしてください（Escで取消）`);
+}
+
+function offsetDataFor(a, bx, by){
+  if (a.kind === "line"){
+    return { kind:"line", color:a.color, lw:a.lw,
+              pointsOff: a.points.map(([x,y])=>[x-bx, y-by]) };
+  }
+  return {
+    kind: a.kind, text: a.text, color: a.color, lw: a.lw, r: a.r, fs: a.fs, font: a.font,
+    xOff: a.x - bx, yOff: a.y - by,
+    pointsOff: a.points ? a.points.map(([x,y])=>[x-bx, y-by]) : null,
+  };
+}
+
+function confirmBasePick(bx, by){
+  const sel = selectedItems.slice();
+  if (!sel.length){ basePickMode=null; return; }
+
+  if (basePickMode === "copy"){
+    baseClipboard = sel.map(a=>offsetDataFor(a, bx, by));
+    pasteWasMove = false; moveUndoIndex = null;
+    basePickMode = null; pasteMode = true;
+    setStatus(`${sel.length}個をコピー／貼り付け位置をクリック（Escで取消）`);
+  } else if (basePickMode === "move"){
+    pushUndo();
+    moveUndoIndex = undoStack.length - 1;
+    baseClipboard = sel.map(a=>offsetDataFor(a, bx, by));
+    // 移動元のページから溶接番号が居なくなることによる欠番も、削除時と同様に詰め直す
+    // （「取消時の番号」設定が"詰める"なら1から連番へ、"欠番のまま"ならカウンタだけ調整）
+    const affectedPages = new Set(sel.filter(a=>a.kind==="weld").map(a=>a.page));
+    annots = annots.filter(a=>!sel.includes(a));
+    renumberPagesAfterRemoval(affectedPages);
+    selectedItems = [];
+    pasteWasMove = true;
+    basePickMode = null; pasteMode = true;
+    redrawAnnotations();
+    setStatus(`${sel.length}個を移動中／移動先をクリック（Escで取消）`);
+  }
+}
+
+function clearPastePreview(){ /* 描画はredrawAnnotations内でpasteMode状態を見て行うため、ここでは何もしない */ }
+
+function updatePastePreview(px, py){
+  redrawAnnotations();
+  if (!baseClipboard.length) return;
+  annoCtx.save();
+  annoCtx.strokeStyle = "#cc44ff"; annoCtx.setLineDash([4,3]);
+  baseClipboard.forEach(d=>{
+    if (d.kind === "line"){
+      annoCtx.beginPath();
+      d.pointsOff.forEach(([ox,oy],i)=>{
+        const [vx,vy] = curViewport.convertToViewportPoint(px+ox, py+oy);
+        if (i===0) annoCtx.moveTo(vx,vy); else annoCtx.lineTo(vx,vy);
+      });
+      annoCtx.lineWidth = d.lw; annoCtx.stroke();
+      return;
+    }
+    const nx = px + d.xOff, ny = py + d.yOff;
+    if (d.pointsOff){
+      annoCtx.beginPath();
+      const full = [...d.pointsOff.map(([ox,oy])=>[px+ox,py+oy]), [nx,ny]];
+      full.forEach(([fx,fy],i)=>{
+        const [vx,vy] = curViewport.convertToViewportPoint(fx,fy);
+        if (i===0) annoCtx.moveTo(vx,vy); else annoCtx.lineTo(vx,vy);
+      });
+      annoCtx.lineWidth = d.lw; annoCtx.stroke();
+    }
+    const [vx,vy] = curViewport.convertToViewportPoint(nx, ny);
+    annoCtx.setLineDash([]);
+    if (d.kind==="weld"){
+      annoCtx.beginPath(); annoCtx.arc(vx,vy,d.r,0,Math.PI*2); annoCtx.stroke();
+      annoCtx.fillStyle="#cc44ff"; annoCtx.font=`${d.fs}px ${cssFontFamily(d.font)}`;
+      annoCtx.textAlign="center"; annoCtx.textBaseline="middle";
+      annoCtx.fillText("?", vx, vy+1);
+    } else {
+      annoCtx.font=`${d.fs}px ${cssFontFamily(d.font)}`;
+      const tw = annoCtx.measureText(d.text).width, bw=tw+12, bh=d.fs+10;
+      annoCtx.strokeRect(vx-bw/2, vy-bh/2, bw, bh);
+    }
+    annoCtx.setLineDash([4,3]);
+  });
+  annoCtx.restore();
+}
+
+function doPasteAt(px, py){
+  pushUndo();
+  const created = [];
+  baseClipboard.forEach(d=>{
+    if (d.kind === "line"){
+      const points = d.pointsOff.map(([ox,oy])=>[px+ox, py+oy]);
+      const na = { page:curPage, kind:"line", color:d.color, lw:d.lw, voided:false, points };
+      annots.push(na); created.push(na);
+      return;
+    }
+    const na = {
+      page: curPage, kind: d.kind, color: d.color, lw: d.lw, r: d.r, fs: d.fs, font: d.font, voided: false,
+      x: px + d.xOff, y: py + d.yOff,
+      points: d.pointsOff ? d.pointsOff.map(([ox,oy])=>[px+ox, py+oy]) : undefined,
+    };
+    if (d.kind === "weld") na.number = nextNumberFor(curPage);
+    else na.text = d.text;
+    annots.push(na); created.push(na);
+  });
+  selectedItems = created;
+  pasteMode = false; baseClipboard = []; pasteWasMove = false; moveUndoIndex = null;
+  redrawAnnotations();
+  setStatus(`${created.length}個を貼り付けました`);
+}
+
+/* ===================== 中クリックドラッグでパン ===================== */
+canvasWrap.addEventListener("mousedown", e=>{
+  if (e.button === 1){
+    e.preventDefault();
+    panning = true;
+    panStart = { x:e.clientX, y:e.clientY };
+    panAccumX = 0; panAccumY = 0;
+    canvasWrap.style.cursor = "grabbing";
+  }
+});
+window.addEventListener("mousemove", e=>{
+  if (panning && panStart){
+    const dx = e.clientX - panStart.x, dy = e.clientY - panStart.y;
+    panStart = { x:e.clientX, y:e.clientY };
+    panAccumX += dx; panAccumY += dy;
+    // 15ピクセル移動ごとに1スクロール（Python版と同じ低速・段階的パン）
+    const STEP = 15;
+    if (Math.abs(panAccumX) >= STEP){
+      canvasWrap.scrollLeft -= panAccumX;
+      panAccumX = 0;
+    }
+    if (Math.abs(panAccumY) >= STEP){
+      canvasWrap.scrollTop -= panAccumY;
+      panAccumY = 0;
+    }
+  }
+});
+window.addEventListener("mouseup", e=>{
+  if (e.button === 1 && panning){
+    panning = false;
+    panStart = null;
+    canvasWrap.style.cursor = "";
+  }
+});
+canvasWrap.addEventListener("auxclick", e=>{ if (e.button===1) e.preventDefault(); });
+
+/* ===================== ホイールでズーム（カーソル位置中心） ===================== */
+canvasWrap.addEventListener("wheel", async (e)=>{
+  if (!pdfFiles.length) return;
+  e.preventDefault();
+  const direction = e.deltaY < 0 ? 1 : -1;
+  let idx = 0, bestDiff = Infinity;
+  ZOOM_LEVELS.forEach((z,i)=>{ const d=Math.abs(z-zoom); if (d<bestDiff){ bestDiff=d; idx=i; } });
+  const newIdx = Math.max(0, Math.min(ZOOM_LEVELS.length-1, idx+direction));
+  if (ZOOM_LEVELS[newIdx] === zoom) return;
+
+  const rect = canvasWrap.getBoundingClientRect();
+  const localX = e.clientX - rect.left, localY = e.clientY - rect.top;
+  const cxBefore = canvasWrap.scrollLeft + localX;
+  const cyBefore = canvasWrap.scrollTop + localY;
+  const oldZoom = zoom;
+  zoom = ZOOM_LEVELS[newIdx];
+  await renderPage();
+  const scale = zoom / oldZoom;
+  canvasWrap.scrollLeft = cxBefore*scale - localX;
+  canvasWrap.scrollTop  = cyBefore*scale - localY;
+  setStatus(`ズーム: ${Math.round(zoom*100)}%`);
+}, {passive:false});
+
+document.addEventListener("keydown", e=>{
+  if (!pdfFiles.length) return;
+  if (e.key==="Escape"){
+    cancelCurrentAction();
+  }
+  if (e.key==="Enter"){
+    if (numPolyMode && numLineMouseCur){
+      e.preventDefault();
+      const endPt = numLineMouseCur;
+      const pts = numPolyPts;
+      numPolyMode=false; numPolyPts=[]; numLineMouseCur=null;
+      finishNumberOrText(mode, pts, endPt[0], endPt[1]);
+    }
+  }
+  if (e.key==="Delete" || e.key==="Backspace"){
+    if (selectedItems.length){
+      e.preventDefault();
+      pushUndo();
+      removeAnnotsWithRenumber(selectedItems);
+      selectedItems = [];
+      redrawAnnotations();
+      setStatus("選択中の項目を削除しました");
+    }
+  }
+  if (!e.ctrlKey && (e.key==="v" || e.key==="V")){
+    if (selectedItems.length){
+      pushUndo();
+      selectedItems.forEach(a=>{ if (a.kind!=="line") a.voided = !a.voided; });
+      redrawAnnotations();
+      setStatus("欠番状態を切り替えました");
+    }
+  }
+  if (e.ctrlKey && e.key==="z"){ e.preventDefault(); document.getElementById("btnUndo").click(); }
+  if (e.ctrlKey && e.key==="y"){ e.preventDefault(); document.getElementById("btnRedo").click(); }
+  if (e.ctrlKey && (e.key==="c" || e.key==="C")){
+    if (selectedItems.length){
+      e.preventDefault();
+      clipboard = selectedItems.map(a=>JSON.parse(JSON.stringify(a)));
+      setStatus(`${clipboard.length} 個をコピーしました`);
+    }
+  }
+  if (e.ctrlKey && (e.key==="x" || e.key==="X")){
+    if (selectedItems.length){
+      e.preventDefault();
+      clipboard = selectedItems.map(a=>JSON.parse(JSON.stringify(a)));
+      pushUndo();
+      removeAnnotsWithRenumber(selectedItems);
+      selectedItems = [];
+      redrawAnnotations();
+      setStatus(`${clipboard.length} 個を切り取りました`);
+    }
+  }
+  if (e.ctrlKey && (e.key==="v" || e.key==="V")){
+    if (clipboard.length){
+      e.preventDefault();
+      pushUndo();
+      const OFFSET = 15;
+      const pasted = clipboard.map(a=>{
+        const copy = JSON.parse(JSON.stringify(a));
+        copy.page = curPage;
+        if (copy.kind === "line"){
+          copy.points = copy.points.map(([x,y])=>[x+OFFSET, y-OFFSET]);
+        } else {
+          copy.x += OFFSET; copy.y -= OFFSET;
+          if (copy.points) copy.points = copy.points.map(([x,y])=>[x+OFFSET, y-OFFSET]);
+        }
+        if (copy.kind === "weld"){
+          copy.number = nextNumberFor(curPage);
+        }
+        return copy;
+      });
+      annots.push(...pasted);
+      selectedItems = pasted;
+      // 次回のCtrl+Vでさらにずらして貼れるよう、クリップボード側の基準位置も更新
+      clipboard = pasted.map(a=>JSON.parse(JSON.stringify(a)));
+      redrawAnnotations();
+      setStatus(`${pasted.length} 個を貼り付けました`);
+    }
+  }
+});
+
+/* ===================== ページ送り・ズーム ===================== */
+function cancelNumberDrawing(){
+  waitingStart=false; startPdf=null; startClient=null;
+  numPolyMode=false; numPolyPts=[]; numLineMouseCur=null;
+  pressInfo=null; numDragRect=false; numRangeStartPdf=null; numRangeCurPdf=null;
+}
+document.getElementById("btnPrev").onclick = async ()=>{
+  if (curPage>0){ curPage--; selectedItems=[]; drawingLine=null; cancelNumberDrawing(); await renderPage(); }
+};
+document.getElementById("btnNext").onclick = async ()=>{
+  if (curPage<totalPages-1){ curPage++; selectedItems=[]; drawingLine=null; cancelNumberDrawing(); await renderPage(); }
+};
+[["zoom50",0.5],["zoom75",0.75],["zoom100",1.0],["zoom150",1.5],["zoom200",2.0]].forEach(([id,z])=>{
+  document.getElementById(id).onclick = async ()=>{ zoom=z; await renderPage(); };
+});
+
+/* ===================== 日本語フォント（保存時に埋め込み） ===================== */
+// WOFF2形式のフォントをそのままpdf-libに渡すと、圧縮フォーマットのまま
+// サブセット化(埋め込み文字を絞り込む処理)が行われた際に、数字などの一部の
+// 文字の輪郭データが壊れて「見た目には存在するのに表示されない」状態になる
+// ことが確認されたため、埋め込み前に必ず生のTTF形式へ展開している。
+const JP_FONT_URLS = {
+  gothic: "https://cdn.jsdelivr.net/npm/@fontsource/noto-sans-jp/files/noto-sans-jp-japanese-400-normal.woff2",
+  mincho: "https://cdn.jsdelivr.net/npm/@fontsource/noto-serif-jp/files/noto-serif-jp-japanese-400-normal.woff2"
+};
+let jpFontTtfCache = {};
+let woff2ReadyPromise = null;
+function ensureWoff2Ready(){
+  if (!woff2ReadyPromise){
+    woff2ReadyPromise = new Promise(resolve=>{
+      if (typeof Module === "undefined"){ resolve(); return; }
+      if (Module.calledRun){ resolve(); return; }
+      Module.onRuntimeInitialized = resolve;
+    });
+  }
+  return woff2ReadyPromise;
+}
+async function woff2ToTtfBytes(woff2Buf){
+  await ensureWoff2Ready();
+  if (typeof Module === "undefined" || typeof Module.decompress !== "function"){
+    throw new Error("WOFF2展開モジュールの読み込みに失敗しました（ネットワーク接続を確認してください）");
+  }
+  const result = Module.decompress(new Uint8Array(woff2Buf));
+  if (result === false) throw new Error("WOFF2フォントの展開に失敗しました");
+  return result;
+}
+async function fetchJpFontBytes(key){
+  if (jpFontTtfCache[key]) return jpFontTtfCache[key];
+  const res = await fetch(JP_FONT_URLS[key]);
+  if (!res.ok) throw new Error(`日本語フォント(${key})の取得に失敗しました`);
+  const woff2Buf = await res.arrayBuffer();
+  const ttfBytes = await woff2ToTtfBytes(woff2Buf);
+  jpFontTtfCache[key] = ttfBytes;
+  return ttfBytes;
+}
+
+/* ===================== 保存 ===================== */
+/* ===================== 保存時の接頭語選択ダイアログ ===================== */
+function askSavePrefix(){
+  return new Promise(resolve=>{
+    const overlay = document.createElement("div");
+    overlay.style.cssText = `position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:10000;
+      display:flex;align-items:center;justify-content:center;`;
+    const box = document.createElement("div");
+    box.style.cssText = `background:#2b2b2b;border-radius:8px;padding:20px 24px;min-width:260px;
+      color:#fff;font-size:13px;box-shadow:0 8px 24px rgba(0,0,0,.5);`;
+    box.innerHTML = `
+      <div style="margin-bottom:12px;">ファイル名の先頭に付ける文字を選択</div>
+      <label style="display:block;padding:4px 0;cursor:pointer;">
+        <input type="radio" name="wnt_prefix" value="溶番" checked> 溶番_ファイル名.pdf</label>
+      <label style="display:block;padding:4px 0;cursor:pointer;">
+        <input type="radio" name="wnt_prefix" value="GB"> GB_ファイル名.pdf</label>
+      <label style="display:block;padding:4px 0;cursor:pointer;">
+        <input type="radio" name="wnt_prefix" value=""> （なし）ファイル名.pdf</label>
+      <div style="margin-top:16px;text-align:right;">
+        <button id="wnt_prefix_cancel" style="background:#444;color:#fff;border:none;border-radius:4px;
+          padding:6px 14px;margin-right:8px;cursor:pointer;">キャンセル</button>
+        <button id="wnt_prefix_ok" style="background:#3a7;color:#fff;border:none;border-radius:4px;
+          padding:6px 14px;cursor:pointer;">OK</button>
+      </div>`;
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+    box.querySelector("#wnt_prefix_ok").onclick = ()=>{
+      const sel = box.querySelector('input[name="wnt_prefix"]:checked');
+      overlay.remove();
+      resolve(sel ? sel.value : "");
+    };
+    box.querySelector("#wnt_prefix_cancel").onclick = ()=>{
+      overlay.remove();
+      resolve(null);
+    };
+  });
+}
+
+/* ===================== PDF標準アノテーション生成ヘルパー =====================
+ * 変更理由:
+ *   これまでは page.drawText()/drawLine()/drawEllipse() でページの内容(コンテンツ
+ *   ストリーム)へ直接図形を焼き込んでいたため、一度保存したPDFを再び開いて
+ *   アノテーションを移動・保存すると「古い位置の図形」がページに残ったまま
+ *   「新しい位置の図形」が追加され、二重表示（焼き付き）が発生していた。
+ *   これを解消するため、溶接番号などをPDF標準の「アノテーション」オブジェクト
+ *   （Circle / Line / FreeText）として保存する方式に変更する。
+ *   保存の度に、本ツールが過去に生成したアノテーション（識別のため /NM に
+ *   "WT-" 接頭辞を付与）をページから全て取り除いてから、現在の編集内容で
+ *   作り直すため、何度保存を繰り返しても重複・焼き付きが発生しない。
+ * 補足:
+ *   Acrobat等の一般的なビューアは、アノテーションに外観ストリーム(/AP)が
+ *   無いとビューア標準の簡易な見た目で表示してしまうため、円・線・文字は
+ *   いずれも専用の外観ストリームを自前で描画して埋め込んでいる。
+ * ================================================================== */
+
+function pdfEscapeText(s){
+  // PDF文字列リテラル( ... )の中では ( ) \ が特別な意味を持つためエスケープする
+  return String(s).replace(/\\/g,"\\\\").replace(/\(/g,"\\(").replace(/\)/g,"\\)");
+}
+
+function colorArr(col){
+  // pdf-libのrgb()オブジェクト({red,green,blue})を、コンテンツストリームで使う
+  // 数値配列 [r,g,b] (0〜1) に変換する
+  return [col.red, col.green, col.blue];
+}
+
+let wtAnnotSeq = 0; // アノテーション識別名(/NM)の重複防止用連番（保存処理全体で共有）
+
+// 円アノテーション（溶接番号の丸）。欠番時の斜線もここに含めて1オブジェクトにまとめることで、
+// Acrobat上で選択できる要素を不必要に増やさないようにしている。
+// /Rotate があるページでは斜線が正しい向きになるよう、Form自体をrotAngle分回転させる
+// （真円は回転しても見た目が変わらないため、この回転を加えても支障はない）。
+function buildCircleAnnot(doc, {x, y, r, lw, col, voided, rotAngle}){
+  const ctx = doc.context;
+  const pad = lw/2 + 1;
+  const bbox = [-r-pad, -r-pad, r+pad, r+pad]; // 正方形なので90度単位の回転でサイズは変わらない
+  const k = 0.5523, rk = r*k; // ベジェ曲線4本で正円を近似するための定数
+  const [cr,cg,cb] = colorArr(col);
+  let content = `q\n${lw} w\n${cr} ${cg} ${cb} RG\n1 1 1 rg\n`
+    + `${r} 0 m\n${r} ${rk} ${rk} ${r} 0 ${r} c\n${-rk} ${r} ${-r} ${rk} ${-r} 0 c\n`
+    + `${-r} ${-rk} ${-rk} ${-r} 0 ${-r} c\n${rk} ${-r} ${r} ${-rk} ${r} 0 c\nB\n`;
+  if (voided){
+    content += `${-r*0.75} 0 m\n${r*0.75} 0 l\nS\n`;
+  }
+  content += "Q";
+  const th = (rotAngle||0) * Math.PI/180;
+  const cos = Math.cos(th), sin = Math.sin(th);
+  const apStream = ctx.stream(content, {
+    Type:"XObject", Subtype:"Form", FormType:1,
+    BBox:bbox, Matrix:[cos,sin,-sin,cos,0,0], Resources:{},
+  });
+  const apRef = ctx.register(apStream);
+  const dict = ctx.obj({
+    Type:"Annot", Subtype:"Circle",
+    Rect:[x+bbox[0], y+bbox[1], x+bbox[2], y+bbox[3]],
+    C:[cr,cg,cb], IC:[1,1,1], BS:{W:lw},
+    NM: `WT-${wtAnnotSeq++}`, F:4, // F:4 = Print（印刷時にも表示する）
+    AP:{N:apRef},
+  });
+  return ctx.register(dict);
+}
+
+// 引き出し線1区間ぶんのLineアノテーション。
+// 座標は元々pdf.jsのビューポート変換でページの回転を考慮済みの値のため、
+// ここで追加の回転補正は行わない（従来のdrawLineと同じ扱い）。
+function buildLineAnnot(doc, {x1, y1, x2, y2, lw, col}){
+  const ctx = doc.context;
+  const pad = lw/2 + 1;
+  const minx = Math.min(x1,x2)-pad, maxx = Math.max(x1,x2)+pad;
+  const miny = Math.min(y1,y2)-pad, maxy = Math.max(y1,y2)+pad;
+  const [cr,cg,cb] = colorArr(col);
+  const content = `q\n${lw} w\n${cr} ${cg} ${cb} RG\n${x1} ${y1} m\n${x2} ${y2} l\nS\nQ`;
+  const apStream = ctx.stream(content, {
+    Type:"XObject", Subtype:"Form", FormType:1,
+    BBox:[minx,miny,maxx,maxy], Resources:{},
+  });
+  const apRef = ctx.register(apStream);
+  const dict = ctx.obj({
+    Type:"Annot", Subtype:"Line",
+    Rect:[minx,miny,maxx,maxy],
+    L:[x1,y1,x2,y2], C:[cr,cg,cb], BS:{W:lw},
+    NM:`WT-${wtAnnotSeq++}`, F:4,
+    AP:{N:apRef},
+  });
+  return ctx.register(dict);
+}
+
+// 溶接番号の文字（円の上に重ねる番号のみ、枠なし）と、
+// テキスト注記（白背景の矩形＋枠線＋文字、欠番時は斜線つき）の両方をこの関数で生成する。
+// ページに/Rotateが設定されている場合、Formの/Matrixで文字を回転させることで、
+// 従来の page.drawText({rotate:...}) と同じ見た目を「移動可能なアノテーション」として再現する。
+function buildFreeTextAnnot(doc, {x, y, text, fs, font, col, rotAngle, box, voided}){
+  const ctx = doc.context;
+  const th = (rotAngle||0) * Math.PI/180;
+  const cos = Math.cos(th), sin = Math.sin(th);
+  const tw = font.widthOfTextAtSize(text, fs);
+  const tox = -tw/2, toy = -fs*0.35; // ベースライン位置の補正（中央揃え用）
+  const [cr,cg,cb] = colorArr(col);
+  let localBBox, contentBody;
+  if (box){
+    // テキスト注記：白背景の矩形＋枠線＋文字（斜線・矩形もMatrixで一緒に回転させるため
+    // ここではすべて未回転のローカル座標で記述する）
+    const bw = tw+12, bh = fs+10;
+    localBBox = [-bw/2, -bh/2, bw/2, bh/2];
+    contentBody = `q\n1 w\n${cr} ${cg} ${cb} RG\n1 1 1 rg\n${-bw/2} ${-bh/2} ${bw} ${bh} re\nB\n`
+      + `${cr} ${cg} ${cb} rg\nBT\n/F1 ${fs} Tf\n${tox} ${toy} Td\n(${pdfEscapeText(text)}) Tj\nET\n`;
+    if (voided){
+      contentBody += `${-bw/2+2} 0 m\n${bw/2-2} 0 l\nS\n`;
+    }
+    contentBody += "Q";
+  } else {
+    // 溶接番号の文字のみ（背景・枠なし）
+    const padT = 2;
+    localBBox = [tox-padT, toy-padT, tox+tw+padT, toy+fs+padT];
+    contentBody = `q\n${cr} ${cg} ${cb} rg\nBT\n/F1 ${fs} Tf\n${tox} ${toy} Td\n(${pdfEscapeText(text)}) Tj\nET\nQ`;
+  }
+  // 未回転のBBoxをMatrixで回転させた後の軸並行外接矩形を求め、それをそのままRectに使うことで
+  // 拡大縮小のズレなく「回転した見た目」をアノテーションの矩形にぴったり収める
+  function applyM(px,py){ return [px*cos - py*sin, px*sin + py*cos]; }
+  const corners = [[localBBox[0],localBBox[1]],[localBBox[2],localBBox[1]],[localBBox[2],localBBox[3]],[localBBox[0],localBBox[3]]].map(([px,py])=>applyM(px,py));
+  const xs = corners.map(c=>c[0]), ys = corners.map(c=>c[1]);
+  const minx = Math.min(...xs), maxx = Math.max(...xs), miny = Math.min(...ys), maxy = Math.max(...ys);
+
+  const apStream = ctx.stream(contentBody, {
+    Type:"XObject", Subtype:"Form", FormType:1,
+    BBox: localBBox, Matrix:[cos,sin,-sin,cos,0,0],
+    Resources:{ Font:{ F1: font.ref } },
+  });
+  const apRef = ctx.register(apStream);
+  const dict = ctx.obj({
+    Type:"Annot", Subtype:"FreeText",
+    Rect:[x+minx, y+miny, x+maxx, y+maxy],
+    Contents: text,
+    DA: `${cr} ${cg} ${cb} rg /F1 ${fs} Tf`,
+    NM:`WT-${wtAnnotSeq++}`, F:4,
+    AP:{N:apRef},
+  });
+  return ctx.register(dict);
+}
+
+// ページの既存アノテーションのうち、本ツール由来のもの(/NMが"WT-"で始まるもの)を取り除いた
+// 「残すべき参照配列」を返す。他アプリ／他者が付けた注釈はそのまま保持する。
+function keepNonToolAnnotRefs(ctx, page){
+  const existingRef = page.node.get(PDFName.of("Annots"));
+  if (!existingRef) return [];
+  const arr = ctx.lookup(existingRef);
+  if (!arr || typeof arr.size !== "function") return [];
+  const kept = [];
+  for (let i=0;i<arr.size();i++){
+    const ref = arr.get(i);
+    try{
+      const dict = ctx.lookup(ref);
+      const nm = dict.get(PDFName.of("NM"));
+      const nmStr = (nm && nm.decodeText) ? nm.decodeText() : "";
+      if (!nmStr.startsWith("WT-")) kept.push(ref);
+    }catch(e){
+      kept.push(ref); // 形式が読み取れないものは念のため残す
+    }
+  }
+  return kept;
+}
+
+async function saveFiles(targetFiles){
+  if (!targetFiles.length) return;
+  const prefix = await askSavePrefix();
+  if (prefix === null){ setStatus("保存をキャンセルしました"); return; }
+  setStatus("PDFを書き出しています...");
+  const warnings = [];
+  try{
+    let savedCount = 0;
+    for (const pf of targetFiles){
+      const fileAnnots = annots.filter(a=>a.page>=pf.offset && a.page<pf.offset+pf.pageCount);
+
+      const doc = await PDFDocument.load(pf.bytes);
+      const helvFont = await doc.embedFont(StandardFonts.Helvetica);
+      const courierFont = await doc.embedFont(StandardFonts.Courier);
+
+      const neededJpKeys = new Set(
+        fileAnnots.filter(a=>a.kind!=="line" && !["helv","courier"].includes(a.font||"gothic")).map(a=>a.font||"gothic")
+      );
+      // Helvetica/Courier専用でも日本語文字が混じっていれば自動フォールバックできるよう常にgothicは候補に含める
+      if (fileAnnots.some(a=>a.kind!=="line" && ["helv","courier"].includes(a.font||"gothic") && /[^\x00-\xFF]/.test(String(a.text||a.number||"")))){
+        neededJpKeys.add("gothic");
+      }
+
+      const jpFonts = {};
+      if (neededJpKeys.size){
+        try{ doc.registerFontkit(fontkit); }catch(e){ /* 既に登録済みの場合は無視 */ }
+        for (const key of neededJpKeys){
+          try{
+            const bytes = await fetchJpFontBytes(key);
+            jpFonts[key] = await doc.embedFont(bytes, {subset:true});
+          }catch(err){
+            console.warn(err);
+            warnings.push(`${pf.name}: 日本語フォント(${key})の埋め込みに失敗したため、Helveticaで代用しました（インターネット接続を確認してください）`);
+          }
+        }
+      }
+
+      function pickFont(a, text){
+        const key = a.font || "gothic";
+        if (key === "courier"){
+          return /[^\x00-\xFF]/.test(text) ? (jpFonts["gothic"] || helvFont) : courierFont;
+        }
+        if (key !== "helv") return jpFonts[key] || helvFont;
+        if (/[^\x00-\xFF]/.test(text)) return jpFonts["gothic"] || helvFont;
+        return helvFont;
+      }
+
+      const pages = doc.getPages();
+
+      // 変更点: ページ本体へ直接描画する代わりに、各ページの「残すべきアノテーション
+      // 参照配列」を用意しておく。まず本ツール由来（/NMが"WT-"）のものを全ページから
+      // 取り除いておくことで、今回対象外のページ（このファイルに項目が無いページ）に
+      // 残っていた過去の描画も含めて確実にクリーンアップされる（＝焼き付き防止）。
+      const pageAnnotRefs = pages.map(page => keepNonToolAnnotRefs(doc.context, page));
+
+      for (const a of fileAnnots){
+        const localPage = a.page - pf.offset;
+        const page = pages[localPage];
+        const refs = pageAnnotRefs[localPage];
+        const rotAngle = page.getRotation().angle || 0;
+        const col = a.voided ? rgb(0.6,0.6,0.6) : hexToRgb(a.color);
+
+        if (a.kind === "line"){
+          // 引き出し線（区間ごとに1本のLineアノテーションとして保存）
+          for (let k=0;k<a.points.length-1;k++){
+            const [x1,y1]=a.points[k], [x2,y2]=a.points[k+1];
+            refs.push(buildLineAnnot(doc, {x1,y1,x2,y2,lw:a.lw,col}));
+          }
+          continue;
+        }
+        if (a.points && a.points.length){
+          // 溶接番号／テキスト注記に付随する引き出し線
+          const full = [...a.points, [a.x, a.y]];
+          for (let k=0;k<full.length-1;k++){
+            const [x1,y1]=full[k], [x2,y2]=full[k+1];
+            refs.push(buildLineAnnot(doc, {x1,y1,x2,y2,lw:a.lw,col}));
+          }
+        }
+        if (a.kind === "weld"){
+          // 円（Circleアノテーション。欠番の斜線も同じオブジェクトに含める）
+          refs.push(buildCircleAnnot(doc, { x:a.x, y:a.y, r:a.r, lw:a.lw, col, voided:a.voided, rotAngle }));
+          // 番号の文字（円と対になるFreeTextアノテーション。枠なし）
+          const label = String(a.number);
+          const font = pickFont(a, label);
+          try{
+            refs.push(buildFreeTextAnnot(doc, { x:a.x, y:a.y, text:label, fs:a.fs, font, col, rotAngle, box:false }));
+          }catch(err){
+            warnings.push(`${pf.name}: 番号 ${label} の描画に失敗しました（${err.message}）`);
+          }
+        } else {
+          // テキスト注記（白背景の矩形＋枠線＋文字を1つのFreeTextアノテーションにまとめる）
+          const font = pickFont(a, a.text);
+          try{
+            refs.push(buildFreeTextAnnot(doc, { x:a.x, y:a.y, text:a.text, fs:a.fs, font, col, rotAngle, box:true, voided:a.voided }));
+          }catch(err){
+            warnings.push(`${pf.name}: テキスト「${a.text}」の描画に失敗しました（${err.message}）`);
+          }
+        }
+      }
+
+      // 各ページの最終的なAnnots配列を反映する（保持分＋今回生成分）。
+      // これにより、ページ内容(コンテンツストリーム)には一切手を加えず、
+      // アノテーションの追加・入れ替えだけで保存が完結するため、
+      // 何度保存を繰り返しても古い図形が残ったり重複したりしない。
+      pages.forEach((page, idx) => {
+        page.node.set(PDFName.of("Annots"), doc.context.obj(pageAnnotRefs[idx]));
+      });
+
+      // 次回このツールで開いたときに番号やテキストを再編集できるよう、
+      // このファイルに属するアノテーション情報をPDF内に埋め込んでおく
+      // （ページ番号はファイル内でのローカル番号に変換して保存する）
+      const dataPayload = JSON.stringify({
+        v:1,
+        annots: fileAnnots.map(a2=>({...a2, page: a2.page - pf.offset})),
+      });
+      doc.catalog.set(PDFName.of("WeldToolData"), PDFHexString.fromText(dataPayload));
+
+      const outBytes = await doc.save();
+      const blob = new Blob([outBytes], {type:"application/pdf"});
+      const url = URL.createObjectURL(blob);
+      const baseName = pf.name.replace(/\.pdf$/i, "");
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${prefix ? prefix+"_" : ""}${baseName}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      savedCount++;
+      // 複数ファイルを連続ダウンロードする際、ブラウザにブロックされにくいよう少し間隔を空ける
+      await new Promise(r=>setTimeout(r, 400));
+    }
+    if (warnings.length){
+      setStatus(`保存が完了しました（${savedCount} 個）。ただし一部警告あり: ${warnings[0]}${warnings.length>1?` 他${warnings.length-1}件`:""}`);
+      console.warn(warnings);
+    } else {
+      setStatus(`保存が完了しました（${savedCount} 個のPDFをダウンロード）`);
+    }
+    isDirty = false;
+  }catch(err){
+    console.error(err);
+    setStatus("保存中にエラーが発生しました: "+err.message);
+  }
+}
+
+document.getElementById("btnSave").onclick = ()=> saveFiles(pdfFiles);
+document.getElementById("btnSaveSelectedFiles").onclick = ()=>{
+  const targets = pdfFiles.filter(pf=>pf.selected);
+  if (!targets.length){ setStatus("保存するPDFにチェックを入れてください"); return; }
+  saveFiles(targets);
+};
+
+/* ===================== 離脱時の未保存確認 ===================== */
+window.addEventListener("beforeunload", e=>{
+  if (isDirty){
+    e.preventDefault();
+    e.returnValue = "";
+  }
+});
+
+function hexToRgb(hex){
+  hex = hex.replace("#","");
+  const r = parseInt(hex.substring(0,2),16)/255;
+  const g = parseInt(hex.substring(2,4),16)/255;
+  const b = parseInt(hex.substring(4,6),16)/255;
+  return rgb(r,g,b);
+}
+
+/* ===================== ライセンスキー確認 ===================== */
+// ★有効なライセンスキーはここに追加・削除してください（複数登録可）。
+//   この配列からキーを外してファイルを更新すると、そのキーを使っている人は
+//   次回アクセス時（6か月を待たずに）再入力を求められます。
+var LICENSE_KEYS = ['17341'];
+// 何日ごとに再入力を求めるか（約6か月=183日）
+var LICENSE_PERIOD_DAYS = 183;
+var LICENSE_STORAGE_KEY = 'weldtool_license_v1';
+
+function licenseStorageGet(){
+  try{ return JSON.parse(localStorage.getItem(LICENSE_STORAGE_KEY) || 'null'); }
+  catch(e){ return null; }
+}
+function licenseStorageSet(obj){
+  try{ localStorage.setItem(LICENSE_STORAGE_KEY, JSON.stringify(obj)); }
+  catch(e){ /* 保存できない環境では毎回キー入力を求める形になる */ }
+}
+// 初回起動時はfirstUsedAtだけを記録し、キー入力なしで使い始められる。
+// キー入力済みならverifiedAtから、未入力（初回猶予中）ならfirstUsedAtから
+// LICENSE_PERIOD_DAYS日が経過するまではゲートを表示しない。
+function isWithinGracePeriod(rec){
+  if(!rec) return false;
+  var now = Date.now();
+  if(rec.key){
+    if(LICENSE_KEYS.indexOf(rec.key) === -1) return false; // キーが失効/削除された
+    var elapsedSinceVerify = (now - rec.verifiedAt) / 86400000;
+    return elapsedSinceVerify < LICENSE_PERIOD_DAYS;
+  }
+  var elapsedSinceFirstUse = (now - rec.firstUsedAt) / 86400000;
+  return elapsedSinceFirstUse < LICENSE_PERIOD_DAYS;
+}
+function showLicenseGate(onSuccess){
+  var overlay = document.getElementById('licenseOverlay');
+  var input   = document.getElementById('licenseKeyField');
+  var errEl   = document.getElementById('licenseError');
+  var btn     = document.getElementById('licenseConfirmBtn');
+  errEl.style.display = 'none';
+  input.value = '';
+  overlay.classList.add('vis');
+  function tryConfirm(){
+    var v = input.value.trim();
+    if(LICENSE_KEYS.indexOf(v) !== -1){
+      licenseStorageSet({key:v, verifiedAt:Date.now()});
+      overlay.classList.remove('vis');
+      onSuccess();
+    } else {
+      errEl.style.display = 'block';
+      input.select();
+    }
+  }
+  btn.onclick = tryConfirm;
+  input.onkeydown = function(e){ if(e.key==='Enter') tryConfirm(); };
+  setTimeout(function(){ input.focus(); }, 150);
+}
+function bootWithLicenseCheck(startFn){
+  var rec = licenseStorageGet();
+  if(!rec){
+    // 初回起動：キー入力なしでそのまま使える。起動日時だけ記録する。
+    licenseStorageSet({firstUsedAt:Date.now()});
+    startFn();
+    return;
+  }
+  if(isWithinGracePeriod(rec)){ startFn(); }
+  else { showLicenseGate(startFn); }
+}
+bootWithLicenseCheck(function(){});
+</script>
+</body>
+</html>
