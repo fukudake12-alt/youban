@@ -121,7 +121,7 @@
     <div class="tgroup">
       <button class="tool" id="btnOpen">📂 開く</button>
       <button class="tool" id="btnAdd">➕ PDF追加</button>
-      <button class="tool" id="btnSave" disabled>💾 保存（ダウンロード）</button>
+      <button class="tool" id="btnSave" disabled>💾 保存</button>
     </div>
     <div class="sep"></div>
 
@@ -147,7 +147,6 @@
     <div class="tgroup">
       <label class="radio active" data-mode="add_weld"><input type="radio" name="mode" value="add_weld" checked>🔢 番号追加</label>
       <label class="radio" data-mode="add_text"><input type="radio" name="mode" value="add_text">✏ テキスト追加</label>
-      <label class="radio" data-mode="add_line"><input type="radio" name="mode" value="add_line">📐 引き出し線</label>
       <label class="radio" data-mode="range_select"><input type="radio" name="mode" value="range_select">⬜ 範囲選択</label>
       <label class="radio" data-mode="select"><input type="radio" name="mode" value="select">☑ 選択/欠番</label>
       <label class="radio" data-mode="delete"><input type="radio" name="mode" value="delete">🗑 削除</label>
@@ -528,7 +527,9 @@ async function loadFiles(fileList, append){
     // 変換用の補助データ(CMap)の場所を教えないと、該当フォントの読み込みに失敗し
     // その文字だけが表示されなくなることが確認されたため、明示的に指定している。
     const doc = await pdfjsLib.getDocument({
-      data: displayBytes,
+      data: displayBytes.slice(0), // 保存用の pf.bytes とメモリを共有しないよう必ず複製する
+      // （pdf.jsはdataに渡したArrayBufferをワーカーへ転送(detach)してしまうため、
+      //   同じバッファを共有していると保存時に「detached ArrayBuffer」エラーになる）
       cMapUrl: "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/cmaps/",
       cMapPacked: true,
     }).promise;
@@ -798,29 +799,6 @@ function redrawAnnotations(){
     annoCtx.strokeRect(rx,ry,rw,rh);
     annoCtx.restore();
   }
-  if (drawingLine && drawingLine.pts.length){
-    annoCtx.save();
-    annoCtx.strokeStyle = colorInput.value;
-    annoCtx.lineWidth = parseFloat(lwInput.value);
-    annoCtx.setLineDash([]);
-    annoCtx.beginPath();
-    drawingLine.pts.forEach(([px,py],i)=>{
-      const [vx,vy] = curViewport.convertToViewportPoint(px,py);
-      if (i===0) annoCtx.moveTo(vx,vy); else annoCtx.lineTo(vx,vy);
-    });
-    if (lineMouseCur){
-      const [vx,vy] = curViewport.convertToViewportPoint(lineMouseCur[0], lineMouseCur[1]);
-      annoCtx.setLineDash([4,3]);
-      annoCtx.lineTo(vx,vy);
-    }
-    annoCtx.stroke();
-    drawingLine.pts.forEach(([px,py])=>{
-      const [vx,vy] = curViewport.convertToViewportPoint(px,py);
-      annoCtx.fillStyle = colorInput.value;
-      annoCtx.beginPath(); annoCtx.arc(vx,vy,2.5,0,Math.PI*2); annoCtx.fill();
-    });
-    annoCtx.restore();
-  }
   if (rangeSelecting && rangeStartPdf && rangeCurPdf){
     const [vx1,vy1] = curViewport.convertToViewportPoint(rangeStartPdf[0], rangeStartPdf[1]);
     const [vx2,vy2] = curViewport.convertToViewportPoint(rangeCurPdf[0], rangeCurPdf[1]);
@@ -944,6 +922,25 @@ function drawAnnotation(a){
     annoCtx.textAlign = "center";
     annoCtx.textBaseline = "middle";
     annoCtx.fillText(String(a.number), vx, vy+1);
+  } else if (a.kind === "text"){
+    // テキスト追加は番号追加と同じ「丸」で表示する
+    annoCtx.font = `${a.fs}px ${cssFontFamily(a.font)}`;
+    const tw = annoCtx.measureText(a.text).width;
+    const rr2 = Math.max(a.r, tw/2+6);
+    annoCtx.beginPath();
+    annoCtx.arc(vx, vy, rr2, 0, Math.PI*2);
+    annoCtx.fill();
+    annoCtx.stroke();
+    if (a.voided){
+      annoCtx.beginPath();
+      annoCtx.moveTo(vx-rr2*0.75, vy);
+      annoCtx.lineTo(vx+rr2*0.75, vy);
+      annoCtx.stroke();
+    }
+    annoCtx.fillStyle = color;
+    annoCtx.textAlign = "center";
+    annoCtx.textBaseline = "middle";
+    annoCtx.fillText(a.text, vx, vy+1);
   } else {
     annoCtx.font = `${a.fs}px ${cssFontFamily(a.font)}`;
     const tw = annoCtx.measureText(a.text).width;
@@ -1344,13 +1341,6 @@ annoCanvas.addEventListener("mousedown", e=>{
     }
     return;
   }
-  if (mode === "add_line"){
-    if (!drawingLine) drawingLine = {pts:[]};
-    drawingLine.pts.push([px,py]);
-    redrawAnnotations();
-    setStatus(`引き出し線: 頂点 ${drawingLine.pts.length} 個（ダブルクリックで確定／Escで取消）`);
-    return;
-  }
   if (mode === "add_rect" || mode === "add_ellipse" || mode === "add_triangle"){
     shapeDrawStart = [px,py];
     shapeDrawCur = [px,py];
@@ -1421,17 +1411,6 @@ function finishNumberOrText(mode, points, endX, endY){
 }
 
 annoCanvas.addEventListener("dblclick", e=>{
-  if (mode==="add_line" && drawingLine){
-    if (drawingLine.pts.length >= 2){
-      const s = currentStyle();
-      annots.push({page:curPage, kind:"line", points:drawingLine.pts, color:s.color, lw:s.lw, voided:false});
-      pushUndo_lineFinish();
-      setStatus("引き出し線を確定しました");
-    }
-    drawingLine = null; lineMouseCur = null;
-    redrawAnnotations();
-    return;
-  }
   if (mode==="select"){
     if (!curViewport) return;
     const [px, py] = clientToPdf(e);
@@ -1501,11 +1480,6 @@ annoCanvas.addEventListener("mousemove", e=>{
     return;
   }
 
-  if (mode==="add_line" && drawingLine){
-    lineMouseCur = [px,py];
-    redrawAnnotations();
-    return;
-  }
   if ((mode==="add_rect" || mode==="add_ellipse" || mode==="add_triangle") && shapeDrawStart){
     shapeDrawCur = [px,py];
     redrawAnnotations();
@@ -2061,7 +2035,7 @@ function buildCircleAnnot(doc, {x, y, r, lw, col, voided, rotAngle}){
     Type:"Annot", Subtype:"Circle",
     Rect:[x+bbox[0], y+bbox[1], x+bbox[2], y+bbox[3]],
     C:[cr,cg,cb], IC:[1,1,1], BS:{W:lw},
-    NM: `WT-${wtAnnotSeq++}`, F:4, // F:4 = Print（印刷時にも表示する）
+    NM: PDFHexString.fromText(`WT-${wtAnnotSeq++}`), F:4, // F:4 = Print（印刷時にも表示する）
     AP:{N:apRef},
   });
   return ctx.register(dict);
@@ -2086,7 +2060,7 @@ function buildLineAnnot(doc, {x1, y1, x2, y2, lw, col}){
     Type:"Annot", Subtype:"Line",
     Rect:[minx,miny,maxx,maxy],
     L:[x1,y1,x2,y2], C:[cr,cg,cb], BS:{W:lw},
-    NM:`WT-${wtAnnotSeq++}`, F:4,
+    NM: PDFHexString.fromText(`WT-${wtAnnotSeq++}`), F:4,
     AP:{N:apRef},
   });
   return ctx.register(dict);
@@ -2110,7 +2084,7 @@ function buildFreeTextAnnot(doc, {x, y, text, fs, font, col, rotAngle, box, void
     const bw = tw+12, bh = fs+10;
     localBBox = [-bw/2, -bh/2, bw/2, bh/2];
     contentBody = `q\n1 w\n${cr} ${cg} ${cb} RG\n1 1 1 rg\n${-bw/2} ${-bh/2} ${bw} ${bh} re\nB\n`
-      + `${cr} ${cg} ${cb} rg\nBT\n/F1 ${fs} Tf\n${tox} ${toy} Td\n(${pdfEscapeText(text)}) Tj\nET\n`;
+      + `${cr} ${cg} ${cb} rg\nBT\n/F1 ${fs} Tf\n${tox} ${toy} Td\n${font.encodeText(text).toString()} Tj\nET\n`;
     if (voided){
       contentBody += `${-bw/2+2} 0 m\n${bw/2-2} 0 l\nS\n`;
     }
@@ -2119,7 +2093,7 @@ function buildFreeTextAnnot(doc, {x, y, text, fs, font, col, rotAngle, box, void
     // 溶接番号の文字のみ（背景・枠なし）
     const padT = 2;
     localBBox = [tox-padT, toy-padT, tox+tw+padT, toy+fs+padT];
-    contentBody = `q\n${cr} ${cg} ${cb} rg\nBT\n/F1 ${fs} Tf\n${tox} ${toy} Td\n(${pdfEscapeText(text)}) Tj\nET\nQ`;
+    contentBody = `q\n${cr} ${cg} ${cb} rg\nBT\n/F1 ${fs} Tf\n${tox} ${toy} Td\n${font.encodeText(text).toString()} Tj\nET\nQ`;
   }
   // 未回転のBBoxをMatrixで回転させた後の軸並行外接矩形を求め、それをそのままRectに使うことで
   // 拡大縮小のズレなく「回転した見た目」をアノテーションの矩形にぴったり収める
@@ -2137,9 +2111,9 @@ function buildFreeTextAnnot(doc, {x, y, text, fs, font, col, rotAngle, box, void
   const dict = ctx.obj({
     Type:"Annot", Subtype:"FreeText",
     Rect:[x+minx, y+miny, x+maxx, y+maxy],
-    Contents: text,
-    DA: `${cr} ${cg} ${cb} rg /F1 ${fs} Tf`,
-    NM:`WT-${wtAnnotSeq++}`, F:4,
+    Contents: PDFHexString.fromText(text),
+    DA: PDFHexString.fromText(`${cr} ${cg} ${cb} rg /F1 ${fs} Tf`),
+    NM: PDFHexString.fromText(`WT-${wtAnnotSeq++}`), F:4,
     AP:{N:apRef},
   });
   return ctx.register(dict);
@@ -2167,15 +2141,36 @@ function keepNonToolAnnotRefs(ctx, page){
   return kept;
 }
 
+/* ===================== ファイル保存（自動ダウンロード方式） ===================== */
+/* 「名前を付けて保存」ダイアログ(showSaveFilePicker)は、環境によってはセキュリティ
+ * ソフト等の影響で書き込みが失敗し0バイトのファイルになる不具合が確認されたため、
+ * 確実性を優先してブラウザの標準ダウンロード機能（自動でダウンロードフォルダへ保存）
+ * に統一する。保存先が分かりにくいという点は、ステータス表示で明示して補う。 */
+function downloadBlob(blob, suggestedName){
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = suggestedName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
 async function saveFiles(targetFiles){
   if (!targetFiles.length) return;
   const prefix = await askSavePrefix();
   if (prefix === null){ setStatus("保存をキャンセルしました"); return; }
+
+  const nameFor = pf => `${prefix ? prefix+"_" : ""}${pf.name.replace(/\.pdf$/i, "")}.pdf`;
+
   setStatus("PDFを書き出しています...");
   const warnings = [];
+  const savedNames = [];
   try{
     let savedCount = 0;
-    for (const pf of targetFiles){
+    for (let fi=0; fi<targetFiles.length; fi++){
+      const pf = targetFiles[fi];
       const fileAnnots = annots.filter(a=>a.page>=pf.offset && a.page<pf.offset+pf.pageCount);
 
       const doc = await PDFDocument.load(pf.bytes);
@@ -2267,8 +2262,18 @@ async function saveFiles(targetFiles){
           }catch(err){
             warnings.push(`${pf.name}: 番号 ${label} の描画に失敗しました（${err.message}）`);
           }
+        } else if (a.kind === "text"){
+          // テキスト追加は番号追加と同じ丸（Circleアノテーション＋枠なしFreeText）で出力する
+          const font = pickFont(a, a.text);
+          const rr2 = Math.max(a.r, font.widthOfTextAtSize(String(a.text), a.fs)/2+6);
+          refs.push(buildCircleAnnot(doc, { x:a.x, y:a.y, r:rr2, lw:a.lw, col, voided:a.voided, rotAngle }));
+          try{
+            refs.push(buildFreeTextAnnot(doc, { x:a.x, y:a.y, text:a.text, fs:a.fs, font, col, rotAngle, box:false }));
+          }catch(err){
+            warnings.push(`${pf.name}: テキスト「${a.text}」の描画に失敗しました（${err.message}）`);
+          }
         } else {
-          // テキスト注記（白背景の矩形＋枠線＋文字を1つのFreeTextアノテーションにまとめる）
+          // それ以外（矢印付き文字など）は従来通り白背景の矩形＋枠線＋文字
           const font = pickFont(a, a.text);
           try{
             refs.push(buildFreeTextAnnot(doc, { x:a.x, y:a.y, text:a.text, fs:a.fs, font, col, rotAngle, box:true, voided:a.voided }));
@@ -2297,24 +2302,21 @@ async function saveFiles(targetFiles){
 
       const outBytes = await doc.save();
       const blob = new Blob([outBytes], {type:"application/pdf"});
-      const url = URL.createObjectURL(blob);
-      const baseName = pf.name.replace(/\.pdf$/i, "");
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = `${prefix ? prefix+"_" : ""}${baseName}.pdf`;
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      URL.revokeObjectURL(url);
+      const suggestedName = nameFor(pf);
+      downloadBlob(blob, suggestedName);
+      savedNames.push(suggestedName);
       savedCount++;
       // 複数ファイルを連続ダウンロードする際、ブラウザにブロックされにくいよう少し間隔を空ける
       await new Promise(r=>setTimeout(r, 400));
     }
+    const savedList = savedNames.length<=3
+      ? savedNames.join("、")
+      : `${savedNames.slice(0,3).join("、")} 他${savedNames.length-3}件`;
     if (warnings.length){
-      setStatus(`保存が完了しました（${savedCount} 個）。ただし一部警告あり: ${warnings[0]}${warnings.length>1?` 他${warnings.length-1}件`:""}`);
+      setStatus(`保存が完了しました（${savedCount} 個 / ブラウザの「ダウンロード」フォルダへ保存: ${savedList}）。ただし一部警告あり: ${warnings[0]}${warnings.length>1?` 他${warnings.length-1}件`:""}`);
       console.warn(warnings);
     } else {
-      setStatus(`保存が完了しました（${savedCount} 個のPDFをダウンロード）`);
+      setStatus(`保存が完了しました。ブラウザの「ダウンロード」フォルダへ保存: ${savedList}`);
     }
     isDirty = false;
   }catch(err){
