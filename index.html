@@ -17,25 +17,47 @@
   }
   #app { display:flex; flex-direction:column; height:100vh; }
 
+  /* 画面(モニター)が小さい時にツールバーが折り返して4段組みなどになり
+     操作領域(canvas)を圧迫するのを防ぐため、折り返しは行わず
+     横スクロールで全ボタンを収める方式にしている */
   .toolbar {
     background:#3c3c3c; padding:6px 8px; display:flex; align-items:center;
-    flex-wrap:wrap; gap:4px; border-bottom:1px solid #222;
+    flex-wrap:nowrap; gap:4px; border-bottom:1px solid #222;
+    overflow-x:auto; overflow-y:hidden; flex-shrink:0;
   }
   /* 関連するボタン類を1つの箱にまとめて視認性を上げるためのグループ枠 */
   .tgroup {
-    display:flex; align-items:center; gap:4px;
+    display:flex; align-items:center; gap:4px; flex-shrink:0;
     background:#474747; padding:4px 6px; border-radius:6px;
   }
   .stylebar {
     background:#333; padding:5px 10px; display:flex; align-items:center;
     gap:10px; border-bottom:1px solid #222; font-size:12px; color:#ccc;
-    flex-wrap:wrap;
+    flex-wrap:nowrap; overflow-x:auto; overflow-y:hidden; flex-shrink:0;
   }
-  .sep { width:1px; height:24px; background:#666; margin:0 6px; }
+  .sep { width:1px; height:24px; background:#666; margin:0 6px; flex-shrink:0; }
+
+  /* 折り返さない分、中身が見切れないよう細めのスクロールバーを表示する */
+  .toolbar::-webkit-scrollbar, .stylebar::-webkit-scrollbar { height:6px; }
+  .toolbar::-webkit-scrollbar-thumb, .stylebar::-webkit-scrollbar-thumb {
+    background:#666; border-radius:3px;
+  }
+  .toolbar::-webkit-scrollbar-track, .stylebar::-webkit-scrollbar-track { background:transparent; }
+  .toolbar, .stylebar { scrollbar-width:thin; scrollbar-color:#666 transparent; }
+
+  /* 画面(ウインドウ幅)が狭いモニターでは、ボタンやラベルを一回り小さくして
+     横スクロールの量そのものも減らす */
+  @media (max-width: 1100px){
+    button.tool { padding:5px 8px; font-size:11px; }
+    label.radio { padding:4px 7px; font-size:11px; }
+    .tgroup { padding:3px 5px; gap:3px; }
+    .toolbar { gap:3px; padding:5px 6px; }
+  }
 
   button.tool {
     background:#555; color:#fff; border:none; border-radius:4px;
     padding:6px 10px; font-size:12px; cursor:pointer; white-space:nowrap;
+    flex-shrink:0;
   }
   button.tool:hover { background:#686868; }
   button.tool:disabled { opacity:.4; cursor:default; }
@@ -44,6 +66,7 @@
   label.radio {
     display:flex; align-items:center; gap:3px; background:#444;
     padding:5px 9px; border-radius:4px; cursor:pointer; font-size:12px;
+    white-space:nowrap; flex-shrink:0;
   }
   label.radio.active { background:#2f6f4f; }
   label.radio input { display:none; }
@@ -53,7 +76,17 @@
   select { background:#222; color:#fff; border:1px solid #555; border-radius:3px; padding:3px; font-size:12px; }
   input[type=range] { vertical-align:middle; }
 
-  #pageLabel { font-size:12px; min-width:70px; text-align:center; }
+  /* ツールバー群をまとめて非表示にする機能 */
+  .toolbarToggleBar{
+    background:#333; border-bottom:1px solid #222; display:flex;
+    justify-content:center; padding:2px 0; flex-shrink:0;
+  }
+  .toolbarToggleBar button{
+    background:none; border:none; color:#9c9; font-size:11px; cursor:pointer;
+    padding:2px 14px; white-space:nowrap;
+  }
+  .toolbarToggleBar button:hover{ color:#3fae7a; }
+  #toolbarsWrap.collapsed{ display:none; }
 
   #canvasWrap {
     flex:1; overflow:auto; background:#1a1a1a; position:relative;
@@ -116,6 +149,12 @@
   </div>
 </div>
 <div id="app">
+
+  <div class="toolbarToggleBar">
+    <button id="btnToggleToolbars" type="button">▲ ツールバーを隠す</button>
+  </div>
+
+  <div id="toolbarsWrap">
 
   <div class="toolbar">
     <div class="tgroup">
@@ -243,6 +282,8 @@
       </label>
     </div>
   </div>
+
+  </div><!-- /#toolbarsWrap -->
 
   <div id="canvasWrap">
     <div id="stage">
@@ -696,6 +737,25 @@ document.getElementById("btnToggleList").onclick = ()=>{
 document.getElementById("btnCloseList").onclick = ()=>{
   document.getElementById("annotListPanel").style.display = "none";
 };
+
+/* ===================== ツールバーの一括しまう/表示 ===================== */
+(function(){
+  const TOOLBAR_COLLAPSE_KEY = "weldtool_toolbars_collapsed";
+  const wrap = document.getElementById("toolbarsWrap");
+  const btn  = document.getElementById("btnToggleToolbars");
+  function apply(collapsed){
+    wrap.classList.toggle("collapsed", collapsed);
+    btn.textContent = collapsed ? "▼ ツールバーを表示" : "▲ ツールバーを隠す";
+  }
+  let collapsed = false;
+  try{ collapsed = localStorage.getItem(TOOLBAR_COLLAPSE_KEY) === "1"; }catch(e){}
+  apply(collapsed);
+  btn.onclick = ()=>{
+    collapsed = !collapsed;
+    apply(collapsed);
+    try{ localStorage.setItem(TOOLBAR_COLLAPSE_KEY, collapsed ? "1" : "0"); }catch(e){}
+  };
+})();
 
 /* ===================== 描画 ===================== */
 async function renderPage(){
