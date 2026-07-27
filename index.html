@@ -191,8 +191,8 @@
   <div class="toolbar" id="mainToolbar">
     <div class="dndItem" data-dnd-id="file" draggable="true">
       <div class="tgroup">
-        <button class="tool" id="btnOpen">📂 開く</button>
-        <button class="tool" id="btnAdd">➕ PDF追加</button>
+        <button class="tool" id="btnOpen" title="複数のPDFをまとめて開けます（ダイアログでCtrl/Cmd+クリックまたはShift+クリックで複数選択）">📂 開く</button>
+        <button class="tool" id="btnAdd" title="複数のPDFをまとめて追加できます（ダイアログでCtrl/Cmd+クリックまたはShift+クリックで複数選択）">➕ PDF追加</button>
         <button class="tool" id="btnSave" disabled>💾 保存</button>
       </div>
       <div class="sep"></div>
@@ -561,12 +561,14 @@ btnCancelPending.onclick = cancelCurrentAction;
 const fileInputAdd = document.getElementById("fileInputAdd");
 
 document.getElementById("btnOpen").onclick = () => {
-  if (isDirty && !window.confirm("保存されていない変更があります。破棄して新しく開きますか？")) return;
   fileInput.click();
 };
 document.getElementById("btnAdd").onclick = () => fileInputAdd.click();
 
-fileInput.onchange = e => { if (e.target.files.length) loadFiles(e.target.files, false); fileInput.value=""; };
+// 「開く」も、既にPDFが読み込み済みの場合はDD(ドラッグ＆ドロップ)と同じく追加読込にする。
+// これにより、DDで複数開いた後に「開く」で別のPDFを選んでも、それまでの分が消えず一覧に残る。
+// 何も読み込んでいない状態で選べば、これまで通り新規読み込みになる。
+fileInput.onchange = e => { if (e.target.files.length) loadFiles(e.target.files, pdfFiles.length>0); fileInput.value=""; };
 fileInputAdd.onchange = e => { if (e.target.files.length) loadFiles(e.target.files, true); fileInputAdd.value=""; };
 
 ["dragover","dragenter"].forEach(ev=>{
