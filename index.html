@@ -17,19 +17,29 @@
   }
   #app { display:flex; flex-direction:column; height:100vh; }
 
-  /* 画面(モニター)が小さい時にツールバーが折り返して4段組みなどになり
-     操作領域(canvas)を圧迫するのを防ぐため、折り返しは行わず
-     横スクロールで全ボタンを収める方式にしている */
+  /* ツールバーは指定した行数（1〜3列、デフォルト2列）に収まるよう折り返し、
+     それでも入りきらない分は縦スクロール（スライド）で見えるようにする。
+     行数は #toolbarRowsSelect で切り替え、JSがmax-heightを計算して適用する。 */
   .toolbar {
-    background:#3c3c3c; padding:6px 8px; display:flex; align-items:center;
-    flex-wrap:nowrap; gap:4px; border-bottom:1px solid #222;
-    overflow-x:auto; overflow-y:hidden; flex-shrink:0;
+    background:#3c3c3c; padding:6px 8px; display:flex; align-items:flex-start; align-content:flex-start;
+    flex-wrap:wrap; gap:4px; row-gap:4px; border-bottom:1px solid #222;
+    overflow-x:hidden; overflow-y:auto; flex-shrink:0;
   }
   /* 関連するボタン類を1つの箱にまとめて視認性を上げるためのグループ枠 */
   .tgroup {
     display:flex; align-items:center; gap:4px; flex-shrink:0;
     background:#474747; padding:4px 6px; border-radius:6px;
   }
+  /* ドラッグ＆ドロップで並び替え可能な単位（グループ＋区切り線）。
+     種類ごとに個人で好きな位置へ移動でき、並び順はブラウザに保存される */
+  .dndItem {
+    display:flex; align-items:center; flex-shrink:0; cursor:grab;
+    border-radius:6px; transition:background .12s;
+  }
+  .dndItem:active { cursor:grabbing; }
+  .dndItem.dragging { opacity:.35; }
+  .dndItem.dragOverBefore { box-shadow: -3px 0 0 0 #3fae7a inset; }
+  .dndItem.dragOverAfter  { box-shadow:  3px 0 0 0 #3fae7a inset; }
   .stylebar {
     background:#333; padding:5px 10px; display:flex; align-items:center;
     gap:10px; border-bottom:1px solid #222; font-size:12px; color:#ccc;
@@ -37,8 +47,8 @@
   }
   .sep { width:1px; height:24px; background:#666; margin:0 6px; flex-shrink:0; }
 
-  /* 折り返さない分、中身が見切れないよう細めのスクロールバーを表示する */
-  .toolbar::-webkit-scrollbar, .stylebar::-webkit-scrollbar { height:6px; }
+  /* 指定行数に入りきらない分は縦スクロールで見えるよう、細めのスクロールバーを表示する */
+  .toolbar::-webkit-scrollbar, .stylebar::-webkit-scrollbar { width:6px; height:6px; }
   .toolbar::-webkit-scrollbar-thumb, .stylebar::-webkit-scrollbar-thumb {
     background:#666; border-radius:3px;
   }
@@ -46,7 +56,7 @@
   .toolbar, .stylebar { scrollbar-width:thin; scrollbar-color:#666 transparent; }
 
   /* 画面(ウインドウ幅)が狭いモニターでは、ボタンやラベルを一回り小さくして
-     横スクロールの量そのものも減らす */
+     同じ行数設定でもより多くの項目が収まるようにする */
   @media (max-width: 1100px){
     button.tool { padding:5px 8px; font-size:11px; }
     label.radio { padding:4px 7px; font-size:11px; }
@@ -79,7 +89,12 @@
   /* ツールバー群をまとめて非表示にする機能 */
   .toolbarToggleBar{
     background:#333; border-bottom:1px solid #222; display:flex;
-    justify-content:center; padding:2px 0; flex-shrink:0;
+    justify-content:center; align-items:center; gap:14px; padding:2px 0; flex-shrink:0;
+  }
+  .toolbarRowsCtrl{ display:flex; align-items:center; gap:5px; color:#9c9; font-size:11px; }
+  .toolbarRowsCtrl select{
+    background:#222; color:#ccc; border:1px solid #555; border-radius:3px;
+    padding:1px 4px; font-size:11px;
   }
   .toolbarToggleBar button{
     background:none; border:none; color:#9c9; font-size:11px; cursor:pointer;
@@ -136,6 +151,16 @@
     font-weight:700;font-size:14px;cursor:pointer;
   }
   .license-btn:hover{background:#3fae7a;}
+
+  /* トースト通知 */
+  #toast{
+    position:fixed; left:50%; bottom:64px; transform:translateX(-50%) translateY(10px);
+    background:#333; color:#fff; padding:10px 18px; border-radius:8px;
+    font-size:13px; box-shadow:0 4px 14px rgba(0,0,0,.5); z-index:10000;
+    opacity:0; pointer-events:none; transition:opacity .18s ease, transform .18s ease;
+    white-space:nowrap;
+  }
+  #toast.show{ opacity:1; transform:translateX(-50%) translateY(0); }
 </style>
 </head>
 <body>
@@ -152,135 +177,172 @@
 
   <div class="toolbarToggleBar">
     <button id="btnToggleToolbars" type="button">▲ ツールバーを隠す</button>
+    <label class="toolbarRowsCtrl">表示行数:
+      <select id="toolbarRowsSelect">
+        <option value="1">1列</option>
+        <option value="2" selected>2列</option>
+        <option value="3">3列</option>
+      </select>
+    </label>
   </div>
 
   <div id="toolbarsWrap">
 
-  <div class="toolbar">
-    <div class="tgroup">
-      <button class="tool" id="btnOpen">📂 開く</button>
-      <button class="tool" id="btnAdd">➕ PDF追加</button>
-      <button class="tool" id="btnSave" disabled>💾 保存</button>
+  <div class="toolbar" id="mainToolbar">
+    <div class="dndItem" data-dnd-id="file" draggable="true">
+      <div class="tgroup">
+        <button class="tool" id="btnOpen">📂 開く</button>
+        <button class="tool" id="btnAdd">➕ PDF追加</button>
+        <button class="tool" id="btnSave" disabled>💾 保存</button>
+      </div>
+      <div class="sep"></div>
     </div>
-    <div class="sep"></div>
 
-    <div class="tgroup">
-      <button class="tool" id="btnPrev">◀ 前ページ</button>
-      <span id="pageLabel">- / -</span>
-      <button class="tool" id="btnNext">次ページ ▶</button>
+    <div class="dndItem" data-dnd-id="filechips" draggable="true">
+      <div id="fileChipsBar" style="display:none;align-items:center;gap:8px;background:#474747;padding:4px 8px;border-radius:6px;flex-shrink:0;font-size:12px;color:#ccc;">
+        <span style="color:#aaa;">読込中のPDF:</span>
+        <div id="fileChips" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
+        <div class="sep"></div>
+        <button class="tool" id="btnDeleteSelectedFiles">選択削除</button>
+        <button class="tool" id="btnSaveSelectedFiles">選択保存</button>
+        <button class="tool" id="btnClearAllFiles">全解除</button>
+      </div>
+      <div class="sep"></div>
     </div>
-    <div class="sep"></div>
 
-    <div class="tgroup">
-      <button class="tool" id="zoom50">50%</button>
-      <button class="tool" id="zoom75">75%</button>
-      <button class="tool" id="zoom100">100%</button>
-      <button class="tool" id="zoom150">150%</button>
-      <button class="tool" id="zoom200">200%</button>
+    <div class="dndItem" data-dnd-id="page" draggable="true">
+      <div class="tgroup">
+        <button class="tool" id="btnPrev">◀ 前ページ</button>
+        <span id="pageLabel">- / -</span>
+        <button class="tool" id="btnNext">次ページ ▶</button>
+      </div>
+      <div class="sep"></div>
     </div>
-    <div class="sep"></div>
-    <button class="tool" id="btnToggleList">📋 一覧</button>
+
+    <div class="dndItem" data-dnd-id="zoom" draggable="true">
+      <div class="tgroup">
+        <button class="tool" id="zoom50">50%</button>
+        <button class="tool" id="zoom75">75%</button>
+        <button class="tool" id="zoom100">100%</button>
+        <button class="tool" id="zoom150">150%</button>
+        <button class="tool" id="zoom200">200%</button>
+      </div>
+      <div class="sep"></div>
+    </div>
+
+    <div class="dndItem" data-dnd-id="list" draggable="true">
+      <button class="tool" id="btnToggleList">📋 一覧</button>
+      <div class="sep"></div>
+    </div>
+
+    <div class="dndItem" data-dnd-id="mode" draggable="true">
+      <div class="tgroup">
+        <label class="radio active" data-mode="add_weld"><input type="radio" name="mode" value="add_weld" checked>🔢 番号追加</label>
+        <label class="radio" data-mode="add_text"><input type="radio" name="mode" value="add_text">✏ テキスト追加</label>
+        <label class="radio" data-mode="range_select"><input type="radio" name="mode" value="range_select">⬜ 範囲選択</label>
+        <label class="radio" data-mode="select"><input type="radio" name="mode" value="select">☑ 選択/欠番</label>
+        <label class="radio" data-mode="delete"><input type="radio" name="mode" value="delete">🗑 削除</label>
+      </div>
+      <div class="sep"></div>
+    </div>
+
+    <div class="dndItem" data-dnd-id="style" draggable="true">
+      <div class="tgroup">
+        <span>線の太さ:</span><input type="range" id="lw" min="0.5" max="5" step="0.5" value="1.2">
+        <span>丸の大きさ:</span><input type="range" id="cr" min="5" max="25" step="1" value="9">
+        <span>文字サイズ:</span><input type="range" id="fs" min="5" max="30" step="1" value="10">
+      </div>
+      <div class="sep"></div>
+    </div>
+
+    <div class="dndItem" data-dnd-id="color" draggable="true">
+      <div class="tgroup">
+        <span>色:</span><input type="color" id="colorPick" value="#ff0000">
+        <span id="colorPresets" style="display:flex;gap:3px;">
+          <button type="button" class="colorPresetBtn" data-color="#ff0000" style="width:20px;height:20px;border-radius:3px;border:1px solid #666;background:#ff0000;cursor:pointer;padding:0;" title="赤"></button>
+          <button type="button" class="colorPresetBtn" data-color="#0000ff" style="width:20px;height:20px;border-radius:3px;border:1px solid #666;background:#0000ff;cursor:pointer;padding:0;" title="青"></button>
+          <button type="button" class="colorPresetBtn" data-color="#00aa00" style="width:20px;height:20px;border-radius:3px;border:1px solid #666;background:#00aa00;cursor:pointer;padding:0;" title="緑"></button>
+          <button type="button" class="colorPresetBtn" data-color="#000000" style="width:20px;height:20px;border-radius:3px;border:1px solid #666;background:#000000;cursor:pointer;padding:0;" title="黒"></button>
+          <button type="button" class="colorPresetBtn" data-color="#ff8c00" style="width:20px;height:20px;border-radius:3px;border:1px solid #666;background:#ff8c00;cursor:pointer;padding:0;" title="橙"></button>
+        </span>
+      </div>
+      <div class="sep"></div>
+    </div>
+
+    <div class="dndItem" data-dnd-id="font" draggable="true">
+      <div class="tgroup">
+        <span>フォント:</span>
+        <select id="fontSelect">
+          <option value="gothic" selected>ゴシック体（日本語可）</option>
+          <option value="mincho">明朝体（日本語可）</option>
+          <option value="helv">Helvetica（英数字専用）</option>
+          <option value="courier">Courier（英数字専用）</option>
+        </select>
+      </div>
+      <div class="sep"></div>
+    </div>
+
+    <div class="dndItem" data-dnd-id="applystyle" draggable="true">
+      <button class="tool" id="btnApplyStyle" style="background:#446688;">選択に適用</button>
+      <div class="sep"></div>
+    </div>
+
+    <div class="dndItem" data-dnd-id="comment" draggable="true">
+      <div class="tgroup">
+        <label class="radio" data-mode="add_comment"><input type="radio" name="mode" value="add_comment">📝 コメント(非印刷)</label>
+        <label class="radio" data-mode="add_arrow_text"><input type="radio" name="mode" value="add_arrow_text">➘ 矢印付き文字</label>
+      </div>
+      <div class="sep"></div>
+    </div>
+
+    <div class="dndItem" data-dnd-id="shapes" draggable="true">
+      <div class="tgroup">
+        <label class="radio" data-mode="add_rect"><input type="radio" name="mode" value="add_rect">▭ 四角形</label>
+        <label class="radio" data-mode="add_ellipse"><input type="radio" name="mode" value="add_ellipse">◯ 円/楕円</label>
+        <label class="radio" data-mode="add_triangle"><input type="radio" name="mode" value="add_triangle">△ 三角形</label>
+        <label class="radio" data-mode="add_freehand"><input type="radio" name="mode" value="add_freehand">✎ フリーハンド</label>
+      </div>
+      <div class="sep"></div>
+    </div>
+
+    <div class="dndItem" data-dnd-id="delmode" draggable="true">
+      <div class="tgroup">
+        <span>取消時の番号:</span>
+        <label style="display:flex;align-items:center;gap:2px;cursor:pointer;">
+          <input type="radio" name="delMode" value="renumber" checked>詰める
+        </label>
+        <label style="display:flex;align-items:center;gap:2px;cursor:pointer;">
+          <input type="radio" name="delMode" value="keep">欠番のまま
+        </label>
+      </div>
+      <div class="sep"></div>
+    </div>
+
+    <div class="dndItem" data-dnd-id="undo" draggable="true">
+      <div class="tgroup">
+        <button class="tool" id="btnUndo" disabled>◀ 戻る</button>
+        <button class="tool" id="btnRedo" disabled>進む ▶</button>
+        <button class="tool" id="btnResetPage">このページを1から振直し</button>
+      </div>
+      <div class="sep"></div>
+    </div>
+
+    <div class="dndItem" data-dnd-id="startnum" draggable="true">
+      <div class="tgroup">
+        <span style="font-size:12px;">開始番号:</span>
+        <input type="number" id="startNum" value="1" min="1">
+        <button class="tool" id="btnApplyStart">この番号から採番</button>
+      </div>
+    </div>
   </div>
 
-  <div class="toolbar">
-    <div class="tgroup">
-      <label class="radio active" data-mode="add_weld"><input type="radio" name="mode" value="add_weld" checked>🔢 番号追加</label>
-      <label class="radio" data-mode="add_text"><input type="radio" name="mode" value="add_text">✏ テキスト追加</label>
-      <label class="radio" data-mode="range_select"><input type="radio" name="mode" value="range_select">⬜ 範囲選択</label>
-      <label class="radio" data-mode="select"><input type="radio" name="mode" value="select">☑ 選択/欠番</label>
-      <label class="radio" data-mode="delete"><input type="radio" name="mode" value="delete">🗑 削除</label>
-    </div>
-    <div class="sep"></div>
-
-    <div class="tgroup">
-      <label class="radio" data-mode="add_comment"><input type="radio" name="mode" value="add_comment">📝 コメント(非印刷)</label>
-      <label class="radio" data-mode="add_arrow_text"><input type="radio" name="mode" value="add_arrow_text">➘ 矢印付き文字</label>
-    </div>
-    <div class="sep"></div>
-
-    <div class="tgroup">
-      <label class="radio" data-mode="add_rect"><input type="radio" name="mode" value="add_rect">▭ 四角形</label>
-      <label class="radio" data-mode="add_ellipse"><input type="radio" name="mode" value="add_ellipse">◯ 円/楕円</label>
-      <label class="radio" data-mode="add_triangle"><input type="radio" name="mode" value="add_triangle">△ 三角形</label>
-      <label class="radio" data-mode="add_freehand"><input type="radio" name="mode" value="add_freehand">✎ フリーハンド</label>
-    </div>
-    <div class="sep"></div>
-
-    <div class="tgroup">
-      <button class="tool" id="btnUndo" disabled>◀ 戻る</button>
-      <button class="tool" id="btnRedo" disabled>進む ▶</button>
-      <button class="tool" id="btnResetPage">このページを1から振直し</button>
-    </div>
-    <div class="sep"></div>
-
-    <div class="tgroup">
-      <span style="font-size:12px;">開始番号:</span>
-      <input type="number" id="startNum" value="1" min="1">
-      <button class="tool" id="btnApplyStart">この番号から採番</button>
-    </div>
-  </div>
-
-  <div id="annotListPanel" style="display:none;position:fixed;top:0;right:0;bottom:0;width:260px;
+  <div id="annotListPanel" style="display:block;position:fixed;top:0;right:0;bottom:0;width:260px;
       background:#2f2f2f;border-left:1px solid #555;z-index:500;overflow-y:auto;font-size:12px;color:#ddd;">
     <div style="padding:8px 10px;background:#3c3c3c;border-bottom:1px solid #222;display:flex;justify-content:space-between;align-items:center;">
       <span>アノテーション一覧</span>
       <button class="tool" id="btnCloseList" style="padding:2px 8px;">✕</button>
     </div>
     <div id="annotListBody" style="padding:6px 8px;"></div>
-  </div>
-
-  <div class="stylebar" id="fileChipsBar" style="display:none;">
-    <span style="color:#aaa;">読込中のPDF:</span>
-    <div id="fileChips" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
-    <div class="sep"></div>
-    <button class="tool" id="btnDeleteSelectedFiles">選択削除</button>
-    <button class="tool" id="btnSaveSelectedFiles">選択保存</button>
-    <button class="tool" id="btnClearAllFiles">全解除</button>
-  </div>
-
-  <div class="stylebar">
-    <div class="tgroup">
-      <span>線の太さ:</span><input type="range" id="lw" min="0.5" max="5" step="0.5" value="1.2">
-      <span>丸の大きさ:</span><input type="range" id="cr" min="5" max="25" step="1" value="9">
-      <span>文字サイズ:</span><input type="range" id="fs" min="5" max="30" step="1" value="10">
-    </div>
-    <div class="sep"></div>
-
-    <div class="tgroup">
-      <span>色:</span><input type="color" id="colorPick" value="#ff0000">
-      <span id="colorPresets" style="display:flex;gap:3px;">
-        <button type="button" class="colorPresetBtn" data-color="#ff0000" style="width:20px;height:20px;border-radius:3px;border:1px solid #666;background:#ff0000;cursor:pointer;padding:0;" title="赤"></button>
-        <button type="button" class="colorPresetBtn" data-color="#0000ff" style="width:20px;height:20px;border-radius:3px;border:1px solid #666;background:#0000ff;cursor:pointer;padding:0;" title="青"></button>
-        <button type="button" class="colorPresetBtn" data-color="#00aa00" style="width:20px;height:20px;border-radius:3px;border:1px solid #666;background:#00aa00;cursor:pointer;padding:0;" title="緑"></button>
-        <button type="button" class="colorPresetBtn" data-color="#000000" style="width:20px;height:20px;border-radius:3px;border:1px solid #666;background:#000000;cursor:pointer;padding:0;" title="黒"></button>
-        <button type="button" class="colorPresetBtn" data-color="#ff8c00" style="width:20px;height:20px;border-radius:3px;border:1px solid #666;background:#ff8c00;cursor:pointer;padding:0;" title="橙"></button>
-      </span>
-    </div>
-    <div class="sep"></div>
-
-    <div class="tgroup">
-      <span>フォント:</span>
-      <select id="fontSelect">
-        <option value="gothic" selected>ゴシック体（日本語可）</option>
-        <option value="mincho">明朝体（日本語可）</option>
-        <option value="helv">Helvetica（英数字専用）</option>
-        <option value="courier">Courier（英数字専用）</option>
-      </select>
-    </div>
-    <div class="sep"></div>
-
-    <button class="tool" id="btnApplyStyle" style="background:#446688;">選択に適用</button>
-    <div class="sep"></div>
-
-    <div class="tgroup">
-      <span>取消時の番号:</span>
-      <label style="display:flex;align-items:center;gap:2px;cursor:pointer;">
-        <input type="radio" name="delMode" value="renumber" checked>詰める
-      </label>
-      <label style="display:flex;align-items:center;gap:2px;cursor:pointer;">
-        <input type="radio" name="delMode" value="keep">欠番のまま
-      </label>
-    </div>
   </div>
 
   </div><!-- /#toolbarsWrap -->
@@ -298,6 +360,8 @@
     <button id="btnCancelPending" type="button" style="display:none;background:#a33;color:#fff;border:none;border-radius:4px;padding:2px 10px;font-size:11px;cursor:pointer;flex-shrink:0;">✕ 取消</button>
   </div>
 </div>
+
+<div id="toast"></div>
 
 <input type="file" id="fileInput" accept="application/pdf" multiple>
 <input type="file" id="fileInputAdd" accept="application/pdf" multiple style="display:none;">
@@ -444,6 +508,16 @@ const fontSelect = document.getElementById("fontSelect");
 const startNumInput = document.getElementById("startNum");
 
 function setStatus(t){ statusBar.textContent = t; updatePendingUI(); }
+
+let toastTimer = null;
+function showToast(msg, ms=2200){
+  const el = document.getElementById("toast");
+  if (!el) return;
+  el.textContent = msg;
+  el.classList.add("show");
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(()=>{ el.classList.remove("show"); }, ms);
+}
 
 // コピー／移動の基点待ち・貼り付け待ちなど「操作の途中でキャンセル可能な状態」の間だけ
 // ステータスバーに✕ボタンを出す。スマホにはEscキーが無く、それまでキャンセル手段が
@@ -755,6 +829,117 @@ document.getElementById("btnCloseList").onclick = ()=>{
     apply(collapsed);
     try{ localStorage.setItem(TOOLBAR_COLLAPSE_KEY, collapsed ? "1" : "0"); }catch(e){}
   };
+})();
+
+/* ===================== ツールバーの表示行数（1〜3列、デフォルト2列） ===================== */
+(function(){
+  const ROWS_KEY = "weldtool_toolbar_rows";
+  const toolbar = document.getElementById("mainToolbar");
+  const select  = document.getElementById("toolbarRowsSelect");
+  if (!toolbar) return;
+
+  function applyRows(rows){
+    const items = toolbar.querySelectorAll(":scope > .dndItem");
+    let itemH = 0;
+    items.forEach(el => { itemH = Math.max(itemH, el.offsetHeight); });
+    if (!itemH) itemH = 30; // 初回未描画時などのフォールバック
+    const cs = getComputedStyle(toolbar);
+    const padTop    = parseFloat(cs.paddingTop) || 0;
+    const padBottom = parseFloat(cs.paddingBottom) || 0;
+    const rowGap    = parseFloat(cs.rowGap) || 4;
+    const maxH = Math.round(rows * itemH + (rows - 1) * rowGap + padTop + padBottom);
+    toolbar.style.maxHeight = maxH + "px";
+  }
+
+  let rows = 2;
+  try{
+    const saved = parseInt(localStorage.getItem(ROWS_KEY), 10);
+    if (saved === 1 || saved === 2 || saved === 3) rows = saved;
+  }catch(e){}
+  if (select) select.value = String(rows);
+
+  // レイアウト確定後（フォントや折り返しが決まった後）に高さを計算する
+  requestAnimationFrame(()=> applyRows(rows));
+  window.addEventListener("resize", ()=> applyRows(rows));
+
+  if (select){
+    select.addEventListener("change", ()=>{
+      rows = parseInt(select.value, 10) || 2;
+      try{ localStorage.setItem(ROWS_KEY, String(rows)); }catch(e){}
+      applyRows(rows);
+    });
+  }
+})();
+
+/* ===================== ツールバーの並び替え（種類ごとにドラッグ＆ドロップ） =====================
+   各グループ（.dndItem）はドラッグして左右に位置を入れ替えられる。
+   並び順はブラウザ（localStorage）に保存され、次回起動時もそのユーザーの並びで復元される。 */
+(function(){
+  const ORDER_KEY = "weldtool_toolbar_order";
+  const bar = document.getElementById("mainToolbar");
+  if (!bar) return;
+
+  function items(){ return Array.from(bar.querySelectorAll(":scope > .dndItem")); }
+
+  // 保存済みの並び順があれば復元（未知のIDや新規追加分は末尾にそのまま残す）
+  function restoreOrder(){
+    let order;
+    try{ order = JSON.parse(localStorage.getItem(ORDER_KEY) || "null"); }catch(e){ order = null; }
+    if (!Array.isArray(order) || !order.length) return;
+    const map = new Map(items().map(el => [el.dataset.dndId, el]));
+    order.forEach(id => { const el = map.get(id); if (el){ bar.appendChild(el); map.delete(id); } });
+    // 保存データに無い（新しく追加された）項目は元の位置のまま末尾側に残る
+  }
+  function saveOrder(){
+    const order = items().map(el => el.dataset.dndId);
+    try{ localStorage.setItem(ORDER_KEY, JSON.stringify(order)); }catch(e){}
+  }
+  restoreOrder();
+
+  let dragEl = null;
+
+  function clearDragOverMarks(){
+    items().forEach(el => el.classList.remove("dragOverBefore","dragOverAfter"));
+  }
+
+  bar.addEventListener("dragstart", (e)=>{
+    const el = e.target.closest(".dndItem");
+    if (!el) return;
+    dragEl = el;
+    el.classList.add("dragging");
+    e.dataTransfer.effectAllowed = "move";
+    try{ e.dataTransfer.setData("text/plain", el.dataset.dndId); }catch(err){}
+  });
+
+  bar.addEventListener("dragend", ()=>{
+    if (dragEl) dragEl.classList.remove("dragging");
+    dragEl = null;
+    clearDragOverMarks();
+  });
+
+  bar.addEventListener("dragover", (e)=>{
+    if (!dragEl) return;
+    const over = e.target.closest(".dndItem");
+    if (!over || over === dragEl) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    const rect = over.getBoundingClientRect();
+    const before = (e.clientX - rect.left) < rect.width / 2;
+    clearDragOverMarks();
+    over.classList.add(before ? "dragOverBefore" : "dragOverAfter");
+  });
+
+  bar.addEventListener("drop", (e)=>{
+    if (!dragEl) return;
+    const over = e.target.closest(".dndItem");
+    if (!over || over === dragEl){ clearDragOverMarks(); return; }
+    e.preventDefault();
+    const rect = over.getBoundingClientRect();
+    const before = (e.clientX - rect.left) < rect.width / 2;
+    bar.insertBefore(dragEl, before ? over : over.nextSibling);
+    clearDragOverMarks();
+    saveOrder();
+  });
 })();
 
 /* ===================== 描画 ===================== */
@@ -1680,20 +1865,26 @@ annoCanvas.addEventListener("contextmenu", e=>{
   if (h && !selectedItems.includes(h.annot)) selectedItems = [h.annot];
   redrawAnnotations();
   const hasSel = selectedItems.length > 0;
-  showContextMenu(e.clientX, e.clientY, [
+  const menuItems = [
     { label:"基点を指定してコピー", enabled:hasSel, onClick:()=>startBasePick("copy") },
     { label:"削除", enabled:hasSel, onClick:()=>{
         pushUndo(); removeAnnotsWithRenumber(selectedItems); selectedItems=[]; redrawAnnotations(); setStatus("削除しました");
       } },
     { label:"基点を指定して移動", enabled:hasSel, onClick:()=>startBasePick("move") },
-    { label:"キャンセル", enabled:true, onClick:()=>{ selectedItems=[]; redrawAnnotations(); } },
-  ]);
+  ];
+  // 貼り付け位置クリック待ち（pasteMode）の間だけ「基点を指定して貼り付け」を表示する
+  if (pasteMode){
+    menuItems.push({ label:"基点を指定して貼り付け", enabled:true, onClick:()=>doPasteAt(px, py) });
+  }
+  menuItems.push({ label:"キャンセル", enabled:true, onClick:()=>{ selectedItems=[]; redrawAnnotations(); } });
+  showContextMenu(e.clientX, e.clientY, menuItems);
 });
 
 function startBasePick(kind){
   if (!selectedItems.length){ setStatus("対象を選択してください"); return; }
   basePickMode = kind;
   setStatus(`${selectedItems.length}個を選択中／基点をクリックしてください（Escで取消）`);
+  showToast("基点を選択してください");
 }
 
 function offsetDataFor(a, bx, by){
@@ -2474,6 +2665,7 @@ function bootWithLicenseCheck(startFn){
   else { showLicenseGate(startFn); }
 }
 bootWithLicenseCheck(function(){});
+renderAnnotList();
 </script>
 </body>
 </html>
