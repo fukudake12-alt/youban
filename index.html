@@ -905,6 +905,11 @@ document.getElementById("btnCloseList").onclick = ()=>{
   }
 
   bar.addEventListener("dragstart", (e)=>{
+    // スライダーやボタンなどの操作部品からのドラッグはタブ移動にしない
+    if (e.target.closest("input, button, select, textarea, label")){
+      e.preventDefault();
+      return;
+    }
     const el = e.target.closest(".dndItem");
     if (!el) return;
     dragEl = el;
