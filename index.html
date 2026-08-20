@@ -33,13 +33,30 @@
   /* ドラッグ＆ドロップで並び替え可能な単位（グループ＋区切り線）。
      種類ごとに個人で好きな位置へ移動でき、並び順はブラウザに保存される */
   .dndItem {
-    display:flex; align-items:center; flex-shrink:0; cursor:grab;
-    border-radius:6px; transition:background .12s;
+    display:flex; align-items:center; flex-shrink:0;
+    border-radius:6px; transition:background .12s; position:relative;
   }
-  .dndItem:active { cursor:grabbing; }
+  /* 移動先の目印はまっすぐな縦棒「|」にする。box-shadow(inset)だと角丸に沿って
+     【のような形になってしまうため、角丸の影響を受けない疑似要素で描画する */
+  .dndItem.dragOverBefore::before,
+  .dndItem.dragOverAfter::after {
+    content:"";
+    position:absolute;
+    top:2px; bottom:2px;
+    width:3px;
+    border-radius:2px;
+    background:#3fae7a;
+  }
+  .dndItem.dragOverBefore::before { left:-4px; }
+  .dndItem.dragOverAfter::after  { right:-4px; }
+  /* 並び替え専用のつまみ。ここをドラッグした時だけタブが移動する
+     （スライダー等の操作部品とドラッグ操作が競合しないようにするため） */
+  .dndHandle {
+    cursor:grab; color:#888; font-size:12px; padding:0 4px 0 2px;
+    flex-shrink:0; user-select:none; line-height:1; touch-action:none;
+  }
+  .dndHandle:active { cursor:grabbing; }
   .dndItem.dragging { opacity:.35; }
-  .dndItem.dragOverBefore { box-shadow: -3px 0 0 0 #3fae7a inset; }
-  .dndItem.dragOverAfter  { box-shadow:  3px 0 0 0 #3fae7a inset; }
   .stylebar {
     background:#333; padding:5px 10px; display:flex; align-items:center;
     gap:10px; border-bottom:1px solid #222; font-size:12px; color:#ccc;
@@ -189,7 +206,8 @@
   <div id="toolbarsWrap">
 
   <div class="toolbar" id="mainToolbar">
-    <div class="dndItem" data-dnd-id="file" draggable="true">
+    <div class="dndItem" data-dnd-id="file">
+      <span class="dndHandle" title="ドラッグで並び替え">⠿</span>
       <div class="tgroup">
         <button class="tool" id="btnOpen" title="複数のPDFをまとめて開けます（ダイアログでCtrl/Cmd+クリックまたはShift+クリックで複数選択）">📂 開く</button>
         <button class="tool" id="btnAdd" title="複数のPDFをまとめて追加できます（ダイアログでCtrl/Cmd+クリックまたはShift+クリックで複数選択）">➕ PDF追加</button>
@@ -198,7 +216,8 @@
       <div class="sep"></div>
     </div>
 
-    <div class="dndItem" data-dnd-id="filechips" draggable="true">
+    <div class="dndItem" data-dnd-id="filechips">
+      <span class="dndHandle" title="ドラッグで並び替え">⠿</span>
       <div id="fileChipsBar" style="display:none;align-items:center;gap:8px;background:#474747;padding:4px 8px;border-radius:6px;flex-shrink:0;font-size:12px;color:#ccc;">
         <span style="color:#aaa;">読込中のPDF:</span>
         <div id="fileChips" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
@@ -210,7 +229,8 @@
       <div class="sep"></div>
     </div>
 
-    <div class="dndItem" data-dnd-id="page" draggable="true">
+    <div class="dndItem" data-dnd-id="page">
+      <span class="dndHandle" title="ドラッグで並び替え">⠿</span>
       <div class="tgroup">
         <button class="tool" id="btnPrev">◀ 前ページ</button>
         <span id="pageLabel">- / -</span>
@@ -219,7 +239,8 @@
       <div class="sep"></div>
     </div>
 
-    <div class="dndItem" data-dnd-id="zoom" draggable="true">
+    <div class="dndItem" data-dnd-id="zoom">
+      <span class="dndHandle" title="ドラッグで並び替え">⠿</span>
       <div class="tgroup">
         <button class="tool" id="zoom50">50%</button>
         <button class="tool" id="zoom75">75%</button>
@@ -230,12 +251,14 @@
       <div class="sep"></div>
     </div>
 
-    <div class="dndItem" data-dnd-id="list" draggable="true">
+    <div class="dndItem" data-dnd-id="list">
+      <span class="dndHandle" title="ドラッグで並び替え">⠿</span>
       <button class="tool" id="btnToggleList">📋 一覧</button>
       <div class="sep"></div>
     </div>
 
-    <div class="dndItem" data-dnd-id="mode" draggable="true">
+    <div class="dndItem" data-dnd-id="mode">
+      <span class="dndHandle" title="ドラッグで並び替え">⠿</span>
       <div class="tgroup">
         <label class="radio active" data-mode="add_weld"><input type="radio" name="mode" value="add_weld" checked>🔢 番号追加</label>
         <label class="radio" data-mode="add_text"><input type="radio" name="mode" value="add_text">✏ テキスト追加</label>
@@ -246,7 +269,8 @@
       <div class="sep"></div>
     </div>
 
-    <div class="dndItem" data-dnd-id="style" draggable="true">
+    <div class="dndItem" data-dnd-id="style">
+      <span class="dndHandle" title="ドラッグで並び替え">⠿</span>
       <div class="tgroup">
         <span>線の太さ:</span><input type="range" id="lw" min="0.5" max="5" step="0.5" value="1.2">
         <span>丸の大きさ:</span><input type="range" id="cr" min="5" max="25" step="1" value="9">
@@ -255,7 +279,8 @@
       <div class="sep"></div>
     </div>
 
-    <div class="dndItem" data-dnd-id="color" draggable="true">
+    <div class="dndItem" data-dnd-id="color">
+      <span class="dndHandle" title="ドラッグで並び替え">⠿</span>
       <div class="tgroup">
         <span>色:</span><input type="color" id="colorPick" value="#ff0000">
         <span id="colorPresets" style="display:flex;gap:3px;">
@@ -269,7 +294,8 @@
       <div class="sep"></div>
     </div>
 
-    <div class="dndItem" data-dnd-id="font" draggable="true">
+    <div class="dndItem" data-dnd-id="font">
+      <span class="dndHandle" title="ドラッグで並び替え">⠿</span>
       <div class="tgroup">
         <span>フォント:</span>
         <select id="fontSelect">
@@ -282,12 +308,14 @@
       <div class="sep"></div>
     </div>
 
-    <div class="dndItem" data-dnd-id="applystyle" draggable="true">
+    <div class="dndItem" data-dnd-id="applystyle">
+      <span class="dndHandle" title="ドラッグで並び替え">⠿</span>
       <button class="tool" id="btnApplyStyle" style="background:#446688;">選択に適用</button>
       <div class="sep"></div>
     </div>
 
-    <div class="dndItem" data-dnd-id="comment" draggable="true">
+    <div class="dndItem" data-dnd-id="comment">
+      <span class="dndHandle" title="ドラッグで並び替え">⠿</span>
       <div class="tgroup">
         <label class="radio" data-mode="add_comment"><input type="radio" name="mode" value="add_comment">📝 コメント(非印刷)</label>
         <label class="radio" data-mode="add_arrow_text"><input type="radio" name="mode" value="add_arrow_text">➘ 矢印付き文字</label>
@@ -295,7 +323,8 @@
       <div class="sep"></div>
     </div>
 
-    <div class="dndItem" data-dnd-id="shapes" draggable="true">
+    <div class="dndItem" data-dnd-id="shapes">
+      <span class="dndHandle" title="ドラッグで並び替え">⠿</span>
       <div class="tgroup">
         <label class="radio" data-mode="add_rect"><input type="radio" name="mode" value="add_rect">▭ 四角形</label>
         <label class="radio" data-mode="add_ellipse"><input type="radio" name="mode" value="add_ellipse">◯ 円/楕円</label>
@@ -305,7 +334,8 @@
       <div class="sep"></div>
     </div>
 
-    <div class="dndItem" data-dnd-id="delmode" draggable="true">
+    <div class="dndItem" data-dnd-id="delmode">
+      <span class="dndHandle" title="ドラッグで並び替え">⠿</span>
       <div class="tgroup">
         <span>取消時の番号:</span>
         <label style="display:flex;align-items:center;gap:2px;cursor:pointer;">
@@ -318,7 +348,8 @@
       <div class="sep"></div>
     </div>
 
-    <div class="dndItem" data-dnd-id="undo" draggable="true">
+    <div class="dndItem" data-dnd-id="undo">
+      <span class="dndHandle" title="ドラッグで並び替え">⠿</span>
       <div class="tgroup">
         <button class="tool" id="btnUndo" disabled>◀ 戻る</button>
         <button class="tool" id="btnRedo" disabled>進む ▶</button>
@@ -327,7 +358,8 @@
       <div class="sep"></div>
     </div>
 
-    <div class="dndItem" data-dnd-id="startnum" draggable="true">
+    <div class="dndItem" data-dnd-id="startnum">
+      <span class="dndHandle" title="ドラッグで並び替え">⠿</span>
       <div class="tgroup">
         <span style="font-size:12px;">開始番号:</span>
         <input type="number" id="startNum" value="1" min="1">
@@ -899,53 +931,115 @@ document.getElementById("btnCloseList").onclick = ()=>{
   restoreOrder();
 
   let dragEl = null;
+  let lastOverEl = null;
+  let lastBefore = null;
+  let activePointerId = null;
 
   function clearDragOverMarks(){
     items().forEach(el => el.classList.remove("dragOverBefore","dragOverAfter"));
   }
 
-  bar.addEventListener("dragstart", (e)=>{
-    // スライダーやボタンなどの操作部品からのドラッグはタブ移動にしない
-    if (e.target.closest("input, button, select, textarea, label")){
-      e.preventDefault();
-      return;
+  // ① カーソルのY座標から「今どの行にいるか」を先に決める
+  // ② その行の中だけで、カーソルが乗っているタブ（無ければ一番近いタブ）を横方向で決める
+  // 行を区別せず横位置だけで探すと、別の行にある無関係なタブを拾ってしまうため
+  // 必ず行を絞り込んでから横方向の判定を行う。
+  function findDropTarget(clientX, clientY){
+    const its = items().filter(el => el !== dragEl);
+    if (!its.length) return null;
+
+    // 1) カーソルYが縦範囲に収まっている行を探す
+    let rowItems = its.filter(el=>{
+      const r = el.getBoundingClientRect();
+      return clientY >= r.top && clientY <= r.bottom;
+    });
+
+    // どの行にも乗っていない（行間の隙間にいる）場合はY方向で一番近い行を採用
+    if (!rowItems.length){
+      let bestRowTop = null, bestRowDist = Infinity;
+      its.forEach(el=>{
+        const r = el.getBoundingClientRect();
+        const cy = r.top + r.height / 2;
+        const d = Math.abs(clientY - cy);
+        if (d < bestRowDist){ bestRowDist = d; bestRowTop = r.top; }
+      });
+      rowItems = its.filter(el=>{
+        const r = el.getBoundingClientRect();
+        return Math.abs(r.top - bestRowTop) < 6;
+      });
     }
-    const el = e.target.closest(".dndItem");
+
+    // 2) その行の中で、カーソルが乗っているタブをそのまま使う
+    for (const el of rowItems){
+      const r = el.getBoundingClientRect();
+      if (clientX >= r.left && clientX <= r.right){
+        const cx = r.left + r.width / 2;
+        return { over: el, before: clientX < cx };
+      }
+    }
+
+    // 3) 隙間にいる場合は、その行の中で一番近い中心のタブを使う
+    let best = null, bestDist = Infinity, bestBefore = true;
+    for (const el of rowItems){
+      const r = el.getBoundingClientRect();
+      const cx = r.left + r.width / 2;
+      const dist = Math.abs(clientX - cx);
+      if (dist < bestDist){
+        bestDist = dist;
+        best = el;
+        bestBefore = clientX < cx;
+      }
+    }
+    return best ? { over: best, before: bestBefore } : null;
+  }
+
+  function finishDrag(){
+    if (dragEl){
+      dragEl.classList.remove("dragging");
+      if (lastOverEl && lastOverEl !== dragEl && bar.contains(lastOverEl)){
+        bar.insertBefore(dragEl, lastBefore ? lastOverEl : lastOverEl.nextSibling);
+        saveOrder();
+      }
+    }
+    clearDragOverMarks();
+    dragEl = null; lastOverEl = null; lastBefore = null; activePointerId = null;
+  }
+
+  function onPointerMove(e){
+    if (!dragEl || e.pointerId !== activePointerId) return;
+    const target = findDropTarget(e.clientX, e.clientY);
+    clearDragOverMarks();
+    if (target){
+      target.over.classList.add(target.before ? "dragOverBefore" : "dragOverAfter");
+      lastOverEl = target.over;
+      lastBefore = target.before;
+    } else {
+      lastOverEl = null; lastBefore = null;
+    }
+  }
+
+  function onPointerUp(e){
+    if (e.pointerId !== activePointerId) return;
+    window.removeEventListener("pointermove", onPointerMove);
+    window.removeEventListener("pointerup", onPointerUp);
+    window.removeEventListener("pointercancel", onPointerUp);
+    finishDrag();
+  }
+
+  // 標準のHTML5ドラッグAPI(draggable属性)はブラウザによって挙動が不安定なため使わず、
+  // ハンドル(.dndHandle)を掴んだ瞬間からpointermove/pointerupで自前追跡する方式にしている。
+  // これによりハイライト表示と実際の移動先が常に同じ計算結果になり、ズレようがない。
+  bar.addEventListener("pointerdown", (e)=>{
+    const handle = e.target.closest(".dndHandle");
+    if (!handle) return;
+    const el = handle.closest(".dndItem");
     if (!el) return;
+    e.preventDefault();
     dragEl = el;
+    activePointerId = e.pointerId;
     el.classList.add("dragging");
-    e.dataTransfer.effectAllowed = "move";
-    try{ e.dataTransfer.setData("text/plain", el.dataset.dndId); }catch(err){}
-  });
-
-  bar.addEventListener("dragend", ()=>{
-    if (dragEl) dragEl.classList.remove("dragging");
-    dragEl = null;
-    clearDragOverMarks();
-  });
-
-  bar.addEventListener("dragover", (e)=>{
-    if (!dragEl) return;
-    const over = e.target.closest(".dndItem");
-    if (!over || over === dragEl) return;
-    e.preventDefault();
-    e.dataTransfer.dropEffect = "move";
-    const rect = over.getBoundingClientRect();
-    const before = (e.clientX - rect.left) < rect.width / 2;
-    clearDragOverMarks();
-    over.classList.add(before ? "dragOverBefore" : "dragOverAfter");
-  });
-
-  bar.addEventListener("drop", (e)=>{
-    if (!dragEl) return;
-    const over = e.target.closest(".dndItem");
-    if (!over || over === dragEl){ clearDragOverMarks(); return; }
-    e.preventDefault();
-    const rect = over.getBoundingClientRect();
-    const before = (e.clientX - rect.left) < rect.width / 2;
-    bar.insertBefore(dragEl, before ? over : over.nextSibling);
-    clearDragOverMarks();
-    saveOrder();
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerUp);
+    window.addEventListener("pointercancel", onPointerUp);
   });
 })();
 
