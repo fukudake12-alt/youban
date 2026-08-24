@@ -1062,22 +1062,34 @@ async function renderPage(){
   const viewport = page.getViewport({ scale: zoom });          // クリック座標変換用（CSSピクセル基準）
   canvasScale = Math.max(zoom, RENDER_MIN_ZOOM) / zoom * dpr;   // 低ズームでも一定解像度を保つための倍率
   const renderViewport = page.getViewport({ scale: zoom*canvasScale }); // 描画解像度用
+
+  // 変更理由（黒チラつき対策）: 従来はここで先にpdfCanvasのサイズを変更してから
+  // await page.render()を待っていたため、その待機中はキャンバスの中身が空になり、
+  // #canvasWrapの黒背景(#1a1a1a)が一瞬透けて見える「チラつき」が発生していた。
+  // いったんオフスクリーン(画面に出ていない)キャンバスへ描画を完了させ、
+  // 本番のpdfCanvasへは「サイズ変更」と「内容の反映」を同じタイミング(awaitを挟まない)
+  // で行うことで、キャンバスが空の状態が画面に映り込む瞬間を無くす。
+  const offCanvas = document.createElement("canvas");
+  offCanvas.width = renderViewport.width;
+  offCanvas.height = renderViewport.height;
+  const offCtx = offCanvas.getContext("2d");
+  // 読み込み時点で本ツール由来のアノテーション(WT-)は取り除いた「表示専用コピー」を
+  // pdf.jsに渡しているため、ここでは既定の描画(他社アプリ由来の注釈も含めて表示)に戻す。
+  await page.render({ canvasContext: offCtx, viewport: renderViewport }).promise;
+
   curViewport = viewport;
 
   pdfCanvas.width = renderViewport.width;
   pdfCanvas.height = renderViewport.height;
   pdfCanvas.style.width = viewport.width+"px";
   pdfCanvas.style.height = viewport.height+"px";
+  pdfCtx.drawImage(offCanvas, 0, 0);
   annoCanvas.width = renderViewport.width;
   annoCanvas.height = renderViewport.height;
   annoCanvas.style.width = viewport.width+"px";
   annoCanvas.style.height = viewport.height+"px";
   stage.style.width = viewport.width+"px";
   stage.style.height = viewport.height+"px";
-
-  // 読み込み時点で本ツール由来のアノテーション(WT-)は取り除いた「表示専用コピー」を
-  // pdf.jsに渡しているため、ここでは既定の描画(他社アプリ由来の注釈も含めて表示)に戻す。
-  await page.render({ canvasContext: pdfCtx, viewport: renderViewport }).promise;
 
   annoCtx.setTransform(1,0,0,1,0,0);
   annoCtx.scale(canvasScale,canvasScale);
@@ -1118,7 +1130,9 @@ function redrawAnnotations(){
     // 次に置かれる番号のプレビュー（テキストの場合は表示しない）
     if (mode==="add_weld" && numLineMouseCur){
       const [vx,vy] = curViewport.convertToViewportPoint(numLineMouseCur[0], numLineMouseCur[1]);
-      const r = parseFloat(crInput.value), fs = parseFloat(fsInput.value);
+      // プレビューも実際の出力サイズ(PDF実寸)にズーム倍率を掛けて表示し、
+      // 配置後の見た目・出力結果とズレないようにする
+      const r = parseFloat(crInput.value)*zoom, fs = parseFloat(fsInput.value)*zoom;
       annoCtx.globalAlpha = 0.6;
       annoCtx.fillStyle = "#ffffff";
       annoCtx.beginPath(); annoCtx.arc(vx,vy,r,0,Math.PI*2); annoCtx.fill(); annoCtx.stroke();
@@ -1202,7 +1216,7 @@ function drawAnnotation(a){
     const pts = shapeBoundaryPoints(a);
     annoCtx.save();
     annoCtx.strokeStyle = color;
-    annoCtx.lineWidth = a.lw;
+    annoCtx.lineWidth = a.lw*zoom; // 出力(PDF実寸)と画面表示を一致させるため、ズーム倍率を掛けて表示する
     annoCtx.beginPath();
     pts.forEach(([px,py],i)=>{
       const [vx,vy] = curViewport.convertToViewportPoint(px,py);
@@ -1222,10 +1236,18 @@ function drawAnnotation(a){
 
   const [vx, vy] = curViewport.convertToViewportPoint(a.x, a.y);
   const color = a.voided ? "#999999" : a.color;
+  // 変更理由（出力と表示のサイズ不一致対策）: a.r/a.fs/a.lwはPDF上の実寸（ズームに関係なく
+  // 一定の物理サイズ）として保存・出力される値。これまで画面表示だけがズーム倍率を無視して
+  // 常に同じ画面ピクセル数で描画していたため、拡大して配置すると画面では余裕があるように
+  // 見えても、実際のPDF出力では隣の番号と重なってしまうことがあった。
+  // ここでズーム倍率を掛けて表示することで、見た目と実際の出力サイズを一致させる。
+  const dispR  = a.r  * zoom;
+  const dispFs = a.fs * zoom;
+  const dispLw = a.lw * zoom;
   annoCtx.save();
   annoCtx.strokeStyle = color;
   annoCtx.fillStyle = "#ffffff";
-  annoCtx.lineWidth = a.lw;
+  annoCtx.lineWidth = dispLw;
 
   // 番号/テキストに紐づく引き出し線（始点→（折れ点）→番号位置）
   if (a.points && a.points.length){
@@ -1240,7 +1262,7 @@ function drawAnnotation(a){
     // 矢印付き文字：線の先端(a.points[0]、＝矢印の指す対象)に矢じるしを描く
     if (a.kind === "arrow_text"){
       const tip = full[0], from = full[1];
-      const size = Math.max(6, a.fs*0.5);
+      const size = Math.max(6, dispFs*0.5);
       arrowHeadSegments(tip[0],tip[1], from[0],from[1], size).forEach(seg=>{
         annoCtx.beginPath();
         seg.forEach(([px,py],i)=>{
@@ -1254,25 +1276,25 @@ function drawAnnotation(a){
 
   if (a.kind === "weld"){
     annoCtx.beginPath();
-    annoCtx.arc(vx, vy, a.r, 0, Math.PI*2);
+    annoCtx.arc(vx, vy, dispR, 0, Math.PI*2);
     annoCtx.fill();
     annoCtx.stroke();
     if (a.voided){
       annoCtx.beginPath();
-      annoCtx.moveTo(vx-a.r*0.75, vy);
-      annoCtx.lineTo(vx+a.r*0.75, vy);
+      annoCtx.moveTo(vx-dispR*0.75, vy);
+      annoCtx.lineTo(vx+dispR*0.75, vy);
       annoCtx.stroke();
     }
     annoCtx.fillStyle = color;
-    annoCtx.font = `${a.fs}px ${cssFontFamily(a.font)}`;
+    annoCtx.font = `${dispFs}px ${cssFontFamily(a.font)}`;
     annoCtx.textAlign = "center";
     annoCtx.textBaseline = "middle";
     annoCtx.fillText(String(a.number), vx, vy+1);
   } else if (a.kind === "text"){
     // テキスト追加は番号追加と同じ「丸」で表示する
-    annoCtx.font = `${a.fs}px ${cssFontFamily(a.font)}`;
+    annoCtx.font = `${dispFs}px ${cssFontFamily(a.font)}`;
     const tw = annoCtx.measureText(a.text).width;
-    const rr2 = Math.max(a.r, tw/2+6);
+    const rr2 = Math.max(dispR, tw/2+6);
     annoCtx.beginPath();
     annoCtx.arc(vx, vy, rr2, 0, Math.PI*2);
     annoCtx.fill();
@@ -1288,9 +1310,9 @@ function drawAnnotation(a){
     annoCtx.textBaseline = "middle";
     annoCtx.fillText(a.text, vx, vy+1);
   } else {
-    annoCtx.font = `${a.fs}px ${cssFontFamily(a.font)}`;
+    annoCtx.font = `${dispFs}px ${cssFontFamily(a.font)}`;
     const tw = annoCtx.measureText(a.text).width;
-    const bw = tw+12, bh = a.fs+10;
+    const bw = tw+12, bh = dispFs+10;
     if (a.kind === "comment"){
       // コメントは「PDFには印刷されない自分用メモ」であることが一目で分かるよう、
       // 付箋風の黄色塗り＋破線枠で表示する
@@ -1319,7 +1341,7 @@ function drawAnnotation(a){
     annoCtx.strokeStyle = "#3ea6ff";
     annoCtx.lineWidth = 1.5;
     annoCtx.setLineDash([4,3]);
-    const rr = (a.kind==="weld") ? a.r+6 : Math.max(a.r, annoCtx.measureText(a.kind==="weld"?String(a.number):a.text).width/2)+8;
+    const rr = (a.kind==="weld") ? dispR+6 : Math.max(dispR, annoCtx.measureText(a.kind==="weld"?String(a.number):a.text).width/2)+8;
     annoCtx.strokeRect(vx-rr, vy-rr, rr*2, rr*2);
     annoCtx.setLineDash([]);
   }
@@ -2056,13 +2078,13 @@ function updatePastePreview(px, py){
     const [vx,vy] = curViewport.convertToViewportPoint(nx, ny);
     annoCtx.setLineDash([]);
     if (d.kind==="weld"){
-      annoCtx.beginPath(); annoCtx.arc(vx,vy,d.r,0,Math.PI*2); annoCtx.stroke();
-      annoCtx.fillStyle="#cc44ff"; annoCtx.font=`${d.fs}px ${cssFontFamily(d.font)}`;
+      annoCtx.beginPath(); annoCtx.arc(vx,vy,d.r*zoom,0,Math.PI*2); annoCtx.stroke();
+      annoCtx.fillStyle="#cc44ff"; annoCtx.font=`${d.fs*zoom}px ${cssFontFamily(d.font)}`;
       annoCtx.textAlign="center"; annoCtx.textBaseline="middle";
       annoCtx.fillText("?", vx, vy+1);
     } else {
-      annoCtx.font=`${d.fs}px ${cssFontFamily(d.font)}`;
-      const tw = annoCtx.measureText(d.text).width, bw=tw+12, bh=d.fs+10;
+      annoCtx.font=`${d.fs*zoom}px ${cssFontFamily(d.font)}`;
+      const tw = annoCtx.measureText(d.text).width, bw=tw+12, bh=d.fs*zoom+10;
       annoCtx.strokeRect(vx-bw/2, vy-bh/2, bw, bh);
     }
     annoCtx.setLineDash([4,3]);
@@ -2133,7 +2155,7 @@ canvasWrap.addEventListener("auxclick", e=>{ if (e.button===1) e.preventDefault(
 
 /* ===================== ホイールでズーム（カーソル位置中心） ===================== */
 canvasWrap.addEventListener("wheel", async (e)=>{
-  if (!pdfFiles.length) return;
+  if (!pdfFiles.length || !curViewport) return;
   e.preventDefault();
   const direction = e.deltaY < 0 ? 1 : -1;
   let idx = 0, bestDiff = Infinity;
@@ -2141,16 +2163,30 @@ canvasWrap.addEventListener("wheel", async (e)=>{
   const newIdx = Math.max(0, Math.min(ZOOM_LEVELS.length-1, idx+direction));
   if (ZOOM_LEVELS[newIdx] === zoom) return;
 
-  const rect = canvasWrap.getBoundingClientRect();
-  const localX = e.clientX - rect.left, localY = e.clientY - rect.top;
-  const cxBefore = canvasWrap.scrollLeft + localX;
-  const cyBefore = canvasWrap.scrollTop + localY;
-  const oldZoom = zoom;
+  // 変更理由（繰り返しズームでのズレ対策）: 従来はcanvasWrap.scrollLeft
+  // （ブラウザが整数pxに丸めた値）を基準に計算していたため、ズーム操作の
+  // たびに端数が切り捨てられ、繰り返すほど誤差が積み重なってズレていった。
+  // また#stageはcanvasWrap内で中央寄せ(justify-content:center)されており、
+  // 単純な余白(margin)の値だけでは正確な位置を割り出せない構造になっている。
+  // そこで、ズーム前に「カーソル位置が指しているPDF上の実座標」を求めておき、
+  // ズーム後に改めてその実座標が画面上のどこに来るかを実測(getBoundingClientRect)
+  // した上でスクロール量を決め直す方式にする。この方法なら整数丸めの誤差が
+  // 次のズーム操作へ持ち越されないため、何度繰り返してもズレが蓄積しない。
+  const stageRectBefore = stage.getBoundingClientRect();
+  const [pdfX, pdfY] = curViewport.convertToPdfPoint(
+    e.clientX - stageRectBefore.left,
+    e.clientY - stageRectBefore.top
+  );
+
   zoom = ZOOM_LEVELS[newIdx];
   await renderPage();
-  const scale = zoom / oldZoom;
-  canvasWrap.scrollLeft = cxBefore*scale - localX;
-  canvasWrap.scrollTop  = cyBefore*scale - localY;
+
+  const [newLocalX, newLocalY] = curViewport.convertToViewportPoint(pdfX, pdfY);
+  const stageRectAfter = stage.getBoundingClientRect();
+  const diffX = (stageRectAfter.left + newLocalX) - e.clientX;
+  const diffY = (stageRectAfter.top  + newLocalY) - e.clientY;
+  canvasWrap.scrollLeft += diffX;
+  canvasWrap.scrollTop  += diffY;
   setStatus(`ズーム: ${Math.round(zoom*100)}%`);
 }, {passive:false});
 
