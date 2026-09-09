@@ -211,7 +211,8 @@
       <div class="tgroup">
         <button class="tool" id="btnOpen" title="複数のPDFをまとめて開けます（ダイアログでCtrl/Cmd+クリックまたはShift+クリックで複数選択）">📂 開く</button>
         <button class="tool" id="btnAdd" title="複数のPDFをまとめて追加できます（ダイアログでCtrl/Cmd+クリックまたはShift+クリックで複数選択）">➕ PDF追加</button>
-        <button class="tool" id="btnSave" disabled>💾 保存</button>
+        <button class="tool" id="btnSave" disabled>💾 PDFで保存</button>
+        <button class="tool" id="btnSavePdfJpeg" disabled title="ページごとに1枚のJPEG画像として保存します">🖼️ JPEGで保存</button>
       </div>
       <div class="sep"></div>
     </div>
@@ -705,6 +706,7 @@ async function loadFiles(fileList, append){
 
   dropHint.style.display = "none";
   document.getElementById("btnSave").disabled = false;
+  document.getElementById("btnSavePdfJpeg").disabled = false;
   updateUndoRedoButtons();
   renderFileChips();
   await renderPage();
@@ -739,6 +741,7 @@ async function removeFiles(filesToRemove){
     isDirty = false;
     dropHint.style.display = "flex";
     document.getElementById("btnSave").disabled = true;
+    document.getElementById("btnSavePdfJpeg").disabled = true;
     pdfCtx.clearRect(0,0,pdfCanvas.width,pdfCanvas.height);
     annoCtx.clearRect(0,0,annoCanvas.width,annoCanvas.height);
     pageLabel.textContent = "- / -";
@@ -1210,142 +1213,150 @@ function cssFontFamily(key){
   return '"Yu Gothic","Hiragino Sans",sans-serif'; // gothic (既定)
 }
 
-function drawAnnotation(a){
+function drawAnnotation(a, opts){
+  // opts省略時は従来通り画面編集用のannoCtx/curViewport/zoom/選択状態を使う。
+  // JPEG書き出し（renderAnnotationsToJpegBlob）など画面外への描画では、
+  // opts経由で任意のctx・viewport・スケールを渡せるようにしてある。
+  const ctx = (opts && opts.ctx) || annoCtx;
+  const viewport = (opts && opts.viewport) || curViewport;
+  const zoomVal = (opts && opts.zoom != null) ? opts.zoom : zoom;
+  const selected = (opts && opts.selected != null) ? opts.selected : selectedItems.includes(a);
+
   if (isPathKind(a.kind)){
     const color = a.voided ? "#999999" : a.color;
     const pts = shapeBoundaryPoints(a);
-    annoCtx.save();
-    annoCtx.strokeStyle = color;
-    annoCtx.lineWidth = a.lw*zoom; // 出力(PDF実寸)と画面表示を一致させるため、ズーム倍率を掛けて表示する
-    annoCtx.beginPath();
+    ctx.save();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = a.lw*zoomVal; // 出力(PDF実寸)と画面表示を一致させるため、ズーム倍率を掛けて表示する
+    ctx.beginPath();
     pts.forEach(([px,py],i)=>{
-      const [vx,vy] = curViewport.convertToViewportPoint(px,py);
-      if (i===0) annoCtx.moveTo(vx,vy); else annoCtx.lineTo(vx,vy);
+      const [vx,vy] = viewport.convertToViewportPoint(px,py);
+      if (i===0) ctx.moveTo(vx,vy); else ctx.lineTo(vx,vy);
     });
-    annoCtx.stroke();
-    if (selectedItems.includes(a)){
-      annoCtx.strokeStyle = "#3ea6ff";
-      annoCtx.lineWidth = 3;
-      annoCtx.setLineDash([4,3]);
-      annoCtx.stroke();
-      annoCtx.setLineDash([]);
+    ctx.stroke();
+    if (selected){
+      ctx.strokeStyle = "#3ea6ff";
+      ctx.lineWidth = 3;
+      ctx.setLineDash([4,3]);
+      ctx.stroke();
+      ctx.setLineDash([]);
     }
-    annoCtx.restore();
+    ctx.restore();
     return;
   }
 
-  const [vx, vy] = curViewport.convertToViewportPoint(a.x, a.y);
+  const [vx, vy] = viewport.convertToViewportPoint(a.x, a.y);
   const color = a.voided ? "#999999" : a.color;
   // 変更理由（出力と表示のサイズ不一致対策）: a.r/a.fs/a.lwはPDF上の実寸（ズームに関係なく
   // 一定の物理サイズ）として保存・出力される値。これまで画面表示だけがズーム倍率を無視して
   // 常に同じ画面ピクセル数で描画していたため、拡大して配置すると画面では余裕があるように
   // 見えても、実際のPDF出力では隣の番号と重なってしまうことがあった。
   // ここでズーム倍率を掛けて表示することで、見た目と実際の出力サイズを一致させる。
-  const dispR  = a.r  * zoom;
-  const dispFs = a.fs * zoom;
-  const dispLw = a.lw * zoom;
-  annoCtx.save();
-  annoCtx.strokeStyle = color;
-  annoCtx.fillStyle = "#ffffff";
-  annoCtx.lineWidth = dispLw;
+  const dispR  = a.r  * zoomVal;
+  const dispFs = a.fs * zoomVal;
+  const dispLw = a.lw * zoomVal;
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.fillStyle = "#ffffff";
+  ctx.lineWidth = dispLw;
 
   // 番号/テキストに紐づく引き出し線（始点→（折れ点）→番号位置）
   if (a.points && a.points.length){
-    annoCtx.beginPath();
+    ctx.beginPath();
     const full = [...a.points, [a.x, a.y]];
     full.forEach(([px,py], i)=>{
-      const [lvx,lvy] = curViewport.convertToViewportPoint(px,py);
-      if (i===0) annoCtx.moveTo(lvx,lvy); else annoCtx.lineTo(lvx,lvy);
+      const [lvx,lvy] = viewport.convertToViewportPoint(px,py);
+      if (i===0) ctx.moveTo(lvx,lvy); else ctx.lineTo(lvx,lvy);
     });
-    annoCtx.stroke();
+    ctx.stroke();
 
     // 矢印付き文字：線の先端(a.points[0]、＝矢印の指す対象)に矢じるしを描く
     if (a.kind === "arrow_text"){
       const tip = full[0], from = full[1];
       const size = Math.max(6, dispFs*0.5);
       arrowHeadSegments(tip[0],tip[1], from[0],from[1], size).forEach(seg=>{
-        annoCtx.beginPath();
+        ctx.beginPath();
         seg.forEach(([px,py],i)=>{
-          const [lvx,lvy] = curViewport.convertToViewportPoint(px,py);
-          if (i===0) annoCtx.moveTo(lvx,lvy); else annoCtx.lineTo(lvx,lvy);
+          const [lvx,lvy] = viewport.convertToViewportPoint(px,py);
+          if (i===0) ctx.moveTo(lvx,lvy); else ctx.lineTo(lvx,lvy);
         });
-        annoCtx.stroke();
+        ctx.stroke();
       });
     }
   }
 
   if (a.kind === "weld"){
-    annoCtx.beginPath();
-    annoCtx.arc(vx, vy, dispR, 0, Math.PI*2);
-    annoCtx.fill();
-    annoCtx.stroke();
+    ctx.beginPath();
+    ctx.arc(vx, vy, dispR, 0, Math.PI*2);
+    ctx.fill();
+    ctx.stroke();
     if (a.voided){
-      annoCtx.beginPath();
-      annoCtx.moveTo(vx-dispR*0.75, vy);
-      annoCtx.lineTo(vx+dispR*0.75, vy);
-      annoCtx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(vx-dispR*0.75, vy);
+      ctx.lineTo(vx+dispR*0.75, vy);
+      ctx.stroke();
     }
-    annoCtx.fillStyle = color;
-    annoCtx.font = `${dispFs}px ${cssFontFamily(a.font)}`;
-    annoCtx.textAlign = "center";
-    annoCtx.textBaseline = "middle";
-    annoCtx.fillText(String(a.number), vx, vy+1);
+    ctx.fillStyle = color;
+    ctx.font = `${dispFs}px ${cssFontFamily(a.font)}`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(String(a.number), vx, vy+1);
   } else if (a.kind === "text"){
     // テキスト追加は番号追加と同じ「丸」で表示する
-    annoCtx.font = `${dispFs}px ${cssFontFamily(a.font)}`;
-    const tw = annoCtx.measureText(a.text).width;
+    ctx.font = `${dispFs}px ${cssFontFamily(a.font)}`;
+    const tw = ctx.measureText(a.text).width;
     const rr2 = Math.max(dispR, tw/2+6);
-    annoCtx.beginPath();
-    annoCtx.arc(vx, vy, rr2, 0, Math.PI*2);
-    annoCtx.fill();
-    annoCtx.stroke();
+    ctx.beginPath();
+    ctx.arc(vx, vy, rr2, 0, Math.PI*2);
+    ctx.fill();
+    ctx.stroke();
     if (a.voided){
-      annoCtx.beginPath();
-      annoCtx.moveTo(vx-rr2*0.75, vy);
-      annoCtx.lineTo(vx+rr2*0.75, vy);
-      annoCtx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(vx-rr2*0.75, vy);
+      ctx.lineTo(vx+rr2*0.75, vy);
+      ctx.stroke();
     }
-    annoCtx.fillStyle = color;
-    annoCtx.textAlign = "center";
-    annoCtx.textBaseline = "middle";
-    annoCtx.fillText(a.text, vx, vy+1);
+    ctx.fillStyle = color;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(a.text, vx, vy+1);
   } else {
-    annoCtx.font = `${dispFs}px ${cssFontFamily(a.font)}`;
-    const tw = annoCtx.measureText(a.text).width;
+    ctx.font = `${dispFs}px ${cssFontFamily(a.font)}`;
+    const tw = ctx.measureText(a.text).width;
     const bw = tw+12, bh = dispFs+10;
     if (a.kind === "comment"){
       // コメントは「PDFには印刷されない自分用メモ」であることが一目で分かるよう、
       // 付箋風の黄色塗り＋破線枠で表示する
-      annoCtx.fillStyle = a.voided ? "#cccccc" : "#fff6b0";
-      annoCtx.fillRect(vx-bw/2, vy-bh/2, bw, bh);
-      annoCtx.setLineDash([3,2]);
-      annoCtx.strokeRect(vx-bw/2, vy-bh/2, bw, bh);
-      annoCtx.setLineDash([]);
+      ctx.fillStyle = a.voided ? "#cccccc" : "#fff6b0";
+      ctx.fillRect(vx-bw/2, vy-bh/2, bw, bh);
+      ctx.setLineDash([3,2]);
+      ctx.strokeRect(vx-bw/2, vy-bh/2, bw, bh);
+      ctx.setLineDash([]);
     } else {
-      annoCtx.fillRect(vx-bw/2, vy-bh/2, bw, bh);
-      annoCtx.strokeRect(vx-bw/2, vy-bh/2, bw, bh);
+      ctx.fillRect(vx-bw/2, vy-bh/2, bw, bh);
+      ctx.strokeRect(vx-bw/2, vy-bh/2, bw, bh);
     }
     if (a.voided){
-      annoCtx.beginPath();
-      annoCtx.moveTo(vx-bw/2+2, vy);
-      annoCtx.lineTo(vx+bw/2-2, vy);
-      annoCtx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(vx-bw/2+2, vy);
+      ctx.lineTo(vx+bw/2-2, vy);
+      ctx.stroke();
     }
-    annoCtx.fillStyle = color;
-    annoCtx.textAlign = "center";
-    annoCtx.textBaseline = "middle";
-    annoCtx.fillText(a.text, vx, vy+1);
+    ctx.fillStyle = color;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(a.text, vx, vy+1);
   }
 
-  if (selectedItems.includes(a)){
-    annoCtx.strokeStyle = "#3ea6ff";
-    annoCtx.lineWidth = 1.5;
-    annoCtx.setLineDash([4,3]);
-    const rr = (a.kind==="weld") ? dispR+6 : Math.max(dispR, annoCtx.measureText(a.kind==="weld"?String(a.number):a.text).width/2)+8;
-    annoCtx.strokeRect(vx-rr, vy-rr, rr*2, rr*2);
-    annoCtx.setLineDash([]);
+  if (selected){
+    ctx.strokeStyle = "#3ea6ff";
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([4,3]);
+    const rr = (a.kind==="weld") ? dispR+6 : Math.max(dispR, ctx.measureText(a.kind==="weld"?String(a.number):a.text).width/2)+8;
+    ctx.strokeRect(vx-rr, vy-rr, rr*2, rr*2);
+    ctx.setLineDash([]);
   }
-  annoCtx.restore();
+  ctx.restore();
 }
 
 /* ===================== モード切替 ===================== */
@@ -2329,7 +2340,8 @@ async function fetchJpFontBytes(key){
 
 /* ===================== 保存 ===================== */
 /* ===================== 保存時の接頭語選択ダイアログ ===================== */
-function askSavePrefix(){
+function askSavePrefix(ext){
+  const extLabel = ext || "pdf";
   return new Promise(resolve=>{
     const overlay = document.createElement("div");
     overlay.style.cssText = `position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:10000;
@@ -2340,11 +2352,11 @@ function askSavePrefix(){
     box.innerHTML = `
       <div style="margin-bottom:12px;">ファイル名の先頭に付ける文字を選択</div>
       <label style="display:block;padding:4px 0;cursor:pointer;">
-        <input type="radio" name="wnt_prefix" value="溶番" checked> 溶番_ファイル名.pdf</label>
+        <input type="radio" name="wnt_prefix" value="溶番" checked> 溶番_ファイル名.${extLabel}</label>
       <label style="display:block;padding:4px 0;cursor:pointer;">
-        <input type="radio" name="wnt_prefix" value="GB"> GB_ファイル名.pdf</label>
+        <input type="radio" name="wnt_prefix" value="GB"> GB_ファイル名.${extLabel}</label>
       <label style="display:block;padding:4px 0;cursor:pointer;">
-        <input type="radio" name="wnt_prefix" value=""> （なし）ファイル名.pdf</label>
+        <input type="radio" name="wnt_prefix" value=""> （なし）ファイル名.${extLabel}</label>
       <div style="margin-top:16px;text-align:right;">
         <button id="wnt_prefix_cancel" style="background:#444;color:#fff;border:none;border-radius:4px;
           padding:6px 14px;margin-right:8px;cursor:pointer;">キャンセル</button>
@@ -2545,9 +2557,84 @@ function downloadBlob(blob, suggestedName){
   URL.revokeObjectURL(url);
 }
 
+/* ===================== JPEG書き出し（画面表示相当の解像度） ===================== */
+// 印刷用の高解像度ではなく、共有・確認用途を想定した「ズーム1倍表示時と同程度」の
+// 解像度に固定する。RENDER_MIN_ZOOMは低ズーム時でも一定の鮮明さを保つための
+// 既存の基準値を流用しているだけで、印刷解像度が必要になった場合はこの1箇所
+// （JPEG_EXPORT_SCALE）を差し替えれば対応できる。
+const JPEG_EXPORT_SCALE = RENDER_MIN_ZOOM * dpr;
+const JPEG_QUALITY = 0.92;
+
+async function renderPageToJpegBlob(pf, localIdx){
+  const page = await pf.pdfjsDoc.getPage(localIdx+1);
+  const viewport = page.getViewport({ scale: JPEG_EXPORT_SCALE });
+  const canvas = document.createElement("canvas");
+  canvas.width = viewport.width;
+  canvas.height = viewport.height;
+  const ctx = canvas.getContext("2d");
+  await page.render({ canvasContext: ctx, viewport }).promise;
+
+  // PDF保存時と同じ基準：コメント（自分用メモ）は画像にも焼き込まない
+  const globalPage = pf.offset + localIdx;
+  const pageAnnots = annots.filter(a=>a.page===globalPage && a.kind!=="comment");
+  for (const a of pageAnnots){
+    drawAnnotation(a, { ctx, viewport, zoom: JPEG_EXPORT_SCALE, selected:false });
+  }
+
+  return await new Promise(resolve => canvas.toBlob(resolve, "image/jpeg", JPEG_QUALITY));
+}
+
+async function saveFileAsJpegPages(pf, prefix, warnings, savedNames){
+  const baseName = pf.name.replace(/\.pdf$/i, "");
+  for (let localIdx=0; localIdx<pf.pageCount; localIdx++){
+    try{
+      const blob = await renderPageToJpegBlob(pf, localIdx);
+      if (!blob){ warnings.push(`${pf.name}: ${localIdx+1}ページ目のJPEG変換に失敗しました`); continue; }
+      // PDFが複数ページの場合、1ページ=1ファイルとしてページ番号を付けて出力する
+      const suggestedName = `${prefix ? prefix+"_" : ""}${baseName}_p${localIdx+1}.jpg`;
+      downloadBlob(blob, suggestedName);
+      savedNames.push(suggestedName);
+      // 連続ダウンロードがブラウザにブロックされにくいよう少し間隔を空ける
+      await new Promise(r=>setTimeout(r, 300));
+    }catch(err){
+      console.error(err);
+      warnings.push(`${pf.name}: ${localIdx+1}ページ目のJPEG変換に失敗しました（${err.message}）`);
+    }
+  }
+}
+
+async function saveFilesAsJpeg(targetFiles){
+  if (!targetFiles.length) return;
+  const prefix = await askSavePrefix("jpg");
+  if (prefix === null){ setStatus("保存をキャンセルしました"); return; }
+
+  setStatus("JPEGを書き出しています...");
+  const warnings = [];
+  const savedNames = [];
+  try{
+    for (const pf of targetFiles){
+      await saveFileAsJpegPages(pf, prefix, warnings, savedNames);
+    }
+    const savedList = savedNames.length<=3
+      ? savedNames.join("、")
+      : `${savedNames.slice(0,3).join("、")} 他${savedNames.length-3}件`;
+    if (warnings.length){
+      setStatus(`JPEG保存が完了しました（${savedNames.length} 個 / ブラウザの「ダウンロード」フォルダへ保存: ${savedList}）。ただし一部警告あり: ${warnings[0]}${warnings.length>1?` 他${warnings.length-1}件`:""}`);
+      console.warn(warnings);
+    } else {
+      setStatus(`JPEG保存が完了しました。ブラウザの「ダウンロード」フォルダへ保存: ${savedList}`);
+    }
+    // JPEGは編集をやり直せない画像出力のため、PDF保存(isDirty=false)とは異なり
+    // 「保存済み」扱いにはしない（離脱確認・上書き確認はPDF保存の有無を基準にする）
+  }catch(err){
+    console.error(err);
+    setStatus("JPEG保存中にエラーが発生しました: "+err.message);
+  }
+}
+
 async function saveFiles(targetFiles){
   if (!targetFiles.length) return;
-  const prefix = await askSavePrefix();
+  const prefix = await askSavePrefix("pdf");
   if (prefix === null){ setStatus("保存をキャンセルしました"); return; }
 
   const nameFor = pf => `${prefix ? prefix+"_" : ""}${pf.name.replace(/\.pdf$/i, "")}.pdf`;
@@ -2694,6 +2781,7 @@ async function saveFiles(targetFiles){
       downloadBlob(blob, suggestedName);
       savedNames.push(suggestedName);
       savedCount++;
+
       // 複数ファイルを連続ダウンロードする際、ブラウザにブロックされにくいよう少し間隔を空ける
       await new Promise(r=>setTimeout(r, 400));
     }
@@ -2701,7 +2789,7 @@ async function saveFiles(targetFiles){
       ? savedNames.join("、")
       : `${savedNames.slice(0,3).join("、")} 他${savedNames.length-3}件`;
     if (warnings.length){
-      setStatus(`保存が完了しました（${savedCount} 個 / ブラウザの「ダウンロード」フォルダへ保存: ${savedList}）。ただし一部警告あり: ${warnings[0]}${warnings.length>1?` 他${warnings.length-1}件`:""}`);
+      setStatus(`保存が完了しました（${savedNames.length} 個 / ブラウザの「ダウンロード」フォルダへ保存: ${savedList}）。ただし一部警告あり: ${warnings[0]}${warnings.length>1?` 他${warnings.length-1}件`:""}`);
       console.warn(warnings);
     } else {
       setStatus(`保存が完了しました。ブラウザの「ダウンロード」フォルダへ保存: ${savedList}`);
@@ -2714,6 +2802,7 @@ async function saveFiles(targetFiles){
 }
 
 document.getElementById("btnSave").onclick = ()=> saveFiles(pdfFiles);
+document.getElementById("btnSavePdfJpeg").onclick = ()=> saveFilesAsJpeg(pdfFiles);
 document.getElementById("btnSaveSelectedFiles").onclick = ()=>{
   const targets = pdfFiles.filter(pf=>pf.selected);
   if (!targets.length){ setStatus("保存するPDFにチェックを入れてください"); return; }
