@@ -2553,8 +2553,8 @@ function downloadBlob(blob, suggestedName){
   link.download = suggestedName;
   document.body.appendChild(link);
   link.click();
-  link.remove();
-  URL.revokeObjectURL(url);
+  // 直後にrevokeするとブラウザによってはダウンロードが失敗/0バイトになるため、十分待ってから解放する
+  setTimeout(()=>{ link.remove(); URL.revokeObjectURL(url); }, 60000);
 }
 
 /* ===================== JPEG書き出し（画面表示相当の解像度） ===================== */
@@ -2669,7 +2669,7 @@ async function saveFiles(targetFiles){
             jpFonts[key] = await doc.embedFont(bytes, {subset:true});
           }catch(err){
             console.warn(err);
-            warnings.push(`${pf.name}: 日本語フォント(${key})の埋め込みに失敗したため、Helveticaで代用しました（インターネット接続を確認してください）`);
+            warnings.push(`${pf.name}: 日本語フォント(${key})の埋め込みに失敗したため、Helveticaで代用しました。日本語の注記は出力されません（インターネット接続・cdn.jsdelivr.net/unpkg.comへのアクセスを確認してください: ${err.message}）`);
           }
         }
       }
